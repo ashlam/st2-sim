@@ -1,0 +1,14 @@
+{
+  "name": "sts2-sim-web",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "杀戮尖塔2 简化版网页复刻（移动端优先）",
+  "scripts": {
+    "start": "node tools/serve.mjs 8080",
+    "smoke": "node tools/smoke.mjs"
+  },
+  "devDependencies": {
+    "playwright-core": "^1.64.1"
+  }
+}

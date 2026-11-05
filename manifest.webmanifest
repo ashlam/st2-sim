@@ -1,0 +1,13 @@
+{
+  "name": "尖塔之下 · 杀戮尖塔2 简版",
+  "short_name": "尖塔之下",
+  "start_url": "./index.html",
+  "display": "fullscreen",
+  "orientation": "portrait",
+  "background_color": "#0b0d10",
+  "theme_color": "#0e1013",
+  "lang": "zh-CN",
+  "icons": [
+    { "src": "./icon.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}
