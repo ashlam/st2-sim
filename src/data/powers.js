@@ -92,6 +92,31 @@ export const POWERS = {
   trashToTreasure: { name: '化废为宝', type: 'buff', desc: () => '每当你生成状态牌，随机生成一个充能球。' },
   energyNextTurn:  { name: '下回合能量', type: 'buff', desc: n => `下个回合额外获得${n}点能量。` },
   freePower:       { name: '免费能力', type: 'buff', desc: () => '下一张能力牌耗能为0。' },
+
+  /* ---- 储君：星愿 / 铸造 / 君王之剑 ---- */
+  childOfTheStars:   { name: '群星之子', type: 'buff', desc: n => `每花费1点星愿，获得${n}点格挡。` },
+  blackHole:         { name: '黑洞', type: 'buff', desc: n => `每当你获得或花费星愿，对所有敌人造成${n}点伤害。` },
+  starNextTurn:      { name: '下回合辉星', type: 'buff', desc: n => `下个回合开始时获得${n}点星愿。` },
+  genesis:           { name: '创世纪', type: 'buff', desc: n => `回合开始时获得${n}点星愿。` },
+  sealedThrone:      { name: '封印王座', type: 'buff', desc: n => `每打出一张牌，获得${n}点星愿。` },
+  furnace:           { name: '熔炉', type: 'buff', desc: n => `回合开始时铸造${n}。` },
+  parry:             { name: '招架', type: 'buff', desc: n => `每打出「君王之剑」，获得${n}点格挡。` },
+  seekingEdge:       { name: '追踪之刃', type: 'buff', desc: () => '「君王之剑」改为对所有敌人造成伤害。' },
+  swordSage:         { name: '剑圣', type: 'buff', desc: n => `「君王之剑」耗能加${n}，并额外命中${n}次。` },
+  conqueror:         { name: '征服者', type: 'debuff', desc: () => '「君王之剑」对该敌人造成双倍伤害，回合结束后消失。' },
+  monarchsGaze:      { name: '王之凝视', type: 'buff', desc: n => `每当你攻击敌人，该敌人本回合失去${n}点力量。` },
+  monologue:         { name: '独白', type: 'buff', desc: n => `本回合每打出一张牌，获得${n}点力量（回合末消失）。` },
+  orbit:             { name: '环绕轨道', type: 'buff', desc: n => `每累计花费4点能量，获得${n}点能量。` },
+  pillarOfCreation:  { name: '创世之柱', type: 'buff', desc: n => `每生成一张牌，获得${n}点格挡。` },
+  reflect:           { name: '倒映', type: 'buff', desc: () => '本回合被格挡挡下的攻击伤害会反弹给攻击者。' },
+  retainHand:        { name: '保留手牌', type: 'buff', desc: n => `接下来${n}个回合结束时保留全部手牌。` },
+  tyranny:           { name: '暴政', type: 'buff', desc: n => `回合开始多抽${n}张牌，然后消耗${n}张手牌。` },
+  paleBlueDot:       { name: '暗淡蓝点', type: 'buff', desc: n => `一回合内打出5张牌时，下个回合额外抽${n}张牌。` },
+  foregoneConclusion:{ name: '既定事项', type: 'buff', desc: n => `下个回合抽牌前，从抽牌堆选${n}张牌加入手牌，然后消失。` },
+  spectrumShift:     { name: '光谱偏移', type: 'buff', desc: n => `回合开始时，将${n}张随机无色牌加入手牌。` },
+  arsenal:           { name: '武器库', type: 'buff', desc: n => `每生成一张无色牌，获得${n}点力量。` },
+  royalties:         { name: '王国资产', type: 'buff', desc: n => `战斗胜利时获得${n}金币。` },
+  voidForm:          { name: '虚空形态', type: 'buff', desc: n => `每回合前${n}张牌免费打出（能量与星愿都为0）。` },
 };
 
 export function powerName(id) { return POWERS[id]?.name || id; }

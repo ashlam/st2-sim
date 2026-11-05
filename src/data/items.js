@@ -130,14 +130,58 @@ export const RELICS = {
     name: '永恒羽毛', icon: '🍃', rarity: 'uncommon',
     desc: '牌组中每有5张牌，进入休息处时回复3点生命。',
   },
+
+  /* ---- 储君专属遗物：RegentRelicPool（v0.111.0，8 件） ---- */
+  DIVINE_RIGHT: {
+    name: '天赋君权', icon: '👑', rarity: 'starter', char: 'REGENT',
+    desc: '每场战斗开始时，获得3点[gold]星愿[/gold]。',
+    onCombatStart: async (C) => { await C.gainStars(3); },
+  },
+  FENCING_MANUAL: {
+    name: '击剑指南', icon: '📖', rarity: 'common', char: 'REGENT',
+    desc: '每场战斗开始时，[gold]铸造[/gold]10。',
+    onTurnStart: async (C, turn) => { if (turn === 1) await C.forge(10); },
+  },
+  GALACTIC_DUST: {
+    name: '星系尘埃', icon: '✨', rarity: 'uncommon', char: 'REGENT',
+    desc: '每累计花费10点[gold]星愿[/gold]，获得10点[gold]格挡[/gold]。',
+  },
+  REGALITE: {
+    name: '君王矿石', icon: '💠', rarity: 'uncommon', char: 'REGENT',
+    desc: '每回合第一次生成无色牌时，获得4点[gold]格挡[/gold]。',
+  },
+  LUNAR_PASTRY: {
+    name: '月亮糕点', icon: '🌙', rarity: 'rare', char: 'REGENT',
+    desc: '在你的回合结束时，获得1点[gold]星愿[/gold]。',
+    onTurnEnd: async (C) => { await C.gainStars(1); },
+  },
+  MINI_REGENT: {
+    name: '迷你储君', icon: '🧸', rarity: 'rare', char: 'REGENT',
+    desc: '每回合第一次花费[gold]星愿[/gold]时，获得1点[gold]力量[/gold]。',
+  },
+  ORANGE_DOUGH: {
+    name: '橙色团块', icon: '🍊', rarity: 'rare', char: 'REGENT',
+    desc: '每场战斗开始时，将2张随机无色牌加入你的手牌。',
+    onTurnStart: async (C, turn) => {
+      if (turn !== 1) return;
+      for (let i = 0; i < 2; i++) {
+        const card = C.randomCardOfType('skill');
+        if (card) { card.colorless = true; C.addCardToHand(card); }
+      }
+    },
+  },
+  VITRUVIAN_MINION: {
+    name: '维特鲁威仆从', icon: '🗿', rarity: 'shop', char: 'REGENT',
+    desc: '带「仆从」标签的卡牌造成双倍的伤害与[gold]格挡[/gold]。',
+  },
 };
 
 export const RELIC_POOLS = {
-  common: ['VAJRA', 'BAG_OF_MARBLES', 'ANCHOR', 'BLOOD_VIAL', 'LANTERN', 'ODDLY_SMOOTH_STONE', 'BAG_OF_PREPARATION', 'HAPPY_FLOWER'],
-  uncommon: ['AKABEKO', 'BRONZE_SCALES', 'MEAT_ON_THE_BONE', 'ORICHALCUM', 'PEN_NIB', 'KUNAI', 'SHURIKEN', 'ART_OF_WAR', 'GIRYA', 'ETERNAL_FEATHER'],
-  rare: ['ICE_CREAM', 'JUZU_BRACELET'],
+  common: ['VAJRA', 'BAG_OF_MARBLES', 'ANCHOR', 'BLOOD_VIAL', 'LANTERN', 'ODDLY_SMOOTH_STONE', 'BAG_OF_PREPARATION', 'HAPPY_FLOWER', 'FENCING_MANUAL'],
+  uncommon: ['AKABEKO', 'BRONZE_SCALES', 'MEAT_ON_THE_BONE', 'ORICHALCUM', 'PEN_NIB', 'KUNAI', 'SHURIKEN', 'ART_OF_WAR', 'GIRYA', 'ETERNAL_FEATHER', 'GALACTIC_DUST', 'REGALITE'],
+  rare: ['ICE_CREAM', 'JUZU_BRACELET', 'LUNAR_PASTRY', 'MINI_REGENT', 'ORANGE_DOUGH'],
   boss: ['SNECKO_EYE', 'RUNIC_PYRAMID', 'SOZU', 'PHILOSOPHERS_STONE'],
-  shop: ['AKABEKO', 'BRONZE_SCALES', 'ORICHALCUM', 'PEN_NIB', 'KUNAI', 'SHURIKEN', 'ICE_CREAM'],
+  shop: ['AKABEKO', 'BRONZE_SCALES', 'ORICHALCUM', 'PEN_NIB', 'KUNAI', 'SHURIKEN', 'ICE_CREAM', 'VITRUVIAN_MINION', 'GALACTIC_DUST'],
 };
 
 /* ================= 药水 ================= */

@@ -13,7 +13,7 @@ const errs = [];
 page.on('pageerror', e => errs.push('pageerror: ' + e.message));
 page.on('console', m => { if (m.type() === 'error') errs.push('console: ' + m.text()); });
 
-await page.goto('http://localhost:8081/index.html', { waitUntil: 'load' });
+await page.goto(`http://localhost:${process.env.PORT || 8081}/index.html`, { waitUntil: 'load' });
 await page.evaluate(() => { window.DEBUG_SPEED = 0; window.app.startRun('IRONCLAD', 0); });
 await page.waitForTimeout(300);
 await page.evaluate(async () => { await window.app.enterNode(window.app.run.map.startNodes[0]); });

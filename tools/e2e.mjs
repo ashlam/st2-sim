@@ -2,7 +2,7 @@
 import { chromium } from 'playwright-core';
 
 const CHROME = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
-const URL = 'http://localhost:8081/index.html';
+const URL = `http://localhost:${process.env.PORT || 8081}/index.html`;
 
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, serviceWorkers: 'block' });

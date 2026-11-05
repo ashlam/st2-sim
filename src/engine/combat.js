@@ -42,6 +42,10 @@ export class Combat {
     this.firstTurnDraw = 0;
     this.extraDrawPerTurn = 0;
     this.confusion = false;
+    // 储君：本场战斗累计计数 / X 星费当次实际花费
+    this.cardsPlayedThisCombat = 0;
+    this.cardsGeneratedThisCombat = 0;
+    this.starXValue = 0;
 
     const ascBane = this.asc >= 5;
     this.player = {
@@ -49,6 +53,12 @@ export class Combat {
       hp: run.hp, maxHp: run.maxHp, block: 0, powers: {}, tempStr: 0,
       vigor: 0, penNib: 0, attackCounter: 0,
       orbs: [], tempFocus: 0,
+      /* 星愿：对照 PlayerCombatState —— Stars 不随回合重置，只有 GainStars/LoseStars 显式改动；
+         StarsGainedThisTurn / 本回合花费量在回合切换时归零。 */
+      stars: 0, starsGainedThisTurn: 0, starsSpentThisTurn: 0, starsSpentThisCombat: 0,
+      voidFormUses: 0, orbitEnergySpent: 0,
+      miniRegentUsed: false, galacticDustStars: 0, regaliteUsed: false,
+      paleBlueDotTriggered: false,
     };
     // 充能球栏位（故障机器人 3 个，其它角色 0 个，第一次生成时补 1 个）
     this.maxOrbSlots = run.orbSlots || 0;
@@ -204,6 +214,7 @@ export class Combat {
     let b = base + (this.player.powers.dexterity || 0);
     if (this.player.powers.frail) b = Math.floor(b * 0.75);
     if (this.player.powers.shadowmeld) b *= 2;
+    if (this.run.relics.includes('VITRUVIAN_MINION') && this.currentCard?.tags?.includes('minion')) b *= 2;
     return Math.max(0, b);
   }
 
@@ -427,6 +438,17 @@ export class Combat {
     this.player.echoFormUses = this.player.powers.echoForm || 0;
     this.player.attackCounter = 0;
     this.player.phantomReady = !!this.player.powers.phantomBlades;
+    // 储君：逐回合计数与一次性标记（对照 PlayerCombatState.EndOfTurnCleanup）
+    this.player.starsGainedThisTurn = 0;
+    this.player.starsSpentThisTurn = 0;
+    this.player.voidFormUses = 0;
+    this.player.miniRegentUsed = false;
+    this.player.regaliteUsed = false;
+    this.player.paleBlueDotTriggered = false;
+    // 「尖啸」「王之凝视」的临时力量削减在下个自己回合开始时恢复
+    for (const e of this.enemies) e.strengthLoss = 0;
+    // 倒映：在上一个敌人回合结束后、下个自己回合开始时移除（ReflectPower.AfterSideTurnStart）
+    delete this.player.powers.reflect;
 
     // 格挡清空（壁垒/残影除外）
     if (!this.player.powers.barricade && !this.player.powers.blur) this.player.block = 0;
@@ -485,6 +507,14 @@ export class Combat {
     }
 
     /* ---- 能量重置之后、抽牌之前的触发（与原作 AfterEnergyReset 对齐） ---- */
+    // 创世纪：回合开始获得星愿；下回合辉星：给完就移除自身
+    if (this.player.powers.genesis) await this.gainStars(this.player.powers.genesis);
+    if (this.player.powers.starNextTurn > 0) {
+      await this.gainStars(this.player.powers.starNextTurn);
+      delete this.player.powers.starNextTurn;
+    }
+    // 熔炉：回合开始铸造（FurnacePower.AfterSideTurnStart）
+    if (this.player.powers.furnace) await this.forge(this.player.powers.furnace);
     if (this.player.powers.energyNextTurn > 0) {
       this.gainEnergy(this.player.powers.energyNextTurn);
       this.logEvent('power', `下回合能量生效：+${this.player.powers.energyNextTurn}`);
@@ -527,12 +557,38 @@ export class Combat {
       }
     }
 
-    // 抽牌（准备背包只在首回合生效，异蛇之眼每回合生效）
+    // 既定事项：抽牌前把抽牌堆最上面的 N 张放进手牌，然后自身移除（ForegoneConclusionPower.BeforeHandDraw）
+    // 简化：原作让玩家从整个抽牌堆里挑，这里直接取顶上 N 张。
+    if (this.player.powers.foregoneConclusion) {
+      const n = this.player.powers.foregoneConclusion;
+      for (let i = 0; i < n && this.drawPile.length && this.hand.length < 10; i++) {
+        this.addCardToHand(this.drawPile.pop(), true);
+      }
+      this.logEvent('power', `「既定事项」：从抽牌堆取 ${n} 张牌加入手牌`);
+      delete this.player.powers.foregoneConclusion;
+    }
+    // 光谱偏移：回合开始生成 N 张随机无色牌（SpectrumShiftPower.BeforeHandDraw）
+    if (this.player.powers.spectrumShift) {
+      for (let i = 0; i < this.player.powers.spectrumShift; i++) {
+        const card = this.randomCardOfType('skill');
+        if (card) this.addCardToHand(card);
+      }
+      this.logEvent('power', `「光谱偏移」：生成 ${this.player.powers.spectrumShift} 张无色牌`);
+    }
+
+    // 抽牌（准备背包只在首回合生效，异蛇之眼每回合生效；暴政额外抽牌）
     const drawCount = 5 + this.extraDrawPerTurn + (first ? this.firstTurnDraw : 0)
-      + (this.player.powers.drawNextTurn || 0) + (this.player.powers.machineLearning || 0);
+      + (this.player.powers.drawNextTurn || 0) + (this.player.powers.machineLearning || 0)
+      + (this.player.powers.tyranny || 0);
     delete this.player.powers.drawNextTurn;
     await this.draw(drawCount, { silent: true });
     if (this.player.powers.toolsOfTheTrade) { await this.draw(1); await this.discardCards(1); }
+    // 暴政：抽牌后消耗手牌（TyrannyPower.AfterPlayerTurnStart）
+    if (this.player.powers.tyranny) {
+      const n = this.player.powers.tyranny;
+      const picked = await this.choose({ from: 'hand', count: n, prompt: `「暴政」：消耗 ${n} 张手牌`, optional: true });
+      for (const c of picked) await this.exhaustCard(c);
+    }
 
     this.player.tempStr = 0;
     this.emit();
@@ -690,7 +746,11 @@ export class Combat {
       if (target.powers.intangible) d = 1;
       // 跟踪：对虚弱敌人伤害翻倍
       if (this.player.powers.tracking && target.powers.weak) d *= 2;
+      // 征服者：君王之剑对该敌人造成双倍伤害（ConquerorPower）
+      if (this.currentCard?.id === 'SOVEREIGN_BLADE' && target.powers.conqueror) d *= 2;
     }
+    // 维特鲁威仆从：带「仆从」标签的牌伤害翻倍
+    if (this.run.relics.includes('VITRUVIAN_MINION') && this.currentCard?.tags?.includes('minion')) d *= 2;
     // 暗影步：本回合攻击翻倍
     if (this.player.powers.shadowStep) d *= 2;
     return Math.max(0, d);
@@ -766,6 +826,19 @@ export class Combat {
     this.hitTarget = target;
     this.emit();
     await this.wait(120);
+
+    // 王之凝视：每当你攻击敌人，该敌人本回合失去 N 点力量
+    if (opts.isAttack && !target.isPlayer && this.player.powers.monarchsGaze) {
+      target.strengthLoss = (target.strengthLoss || 0) + this.player.powers.monarchsGaze;
+      this.logEvent('power', `「王之凝视」：${target.name} 本回合失去 ${this.player.powers.monarchsGaze} 点力量`);
+    }
+    // 倒映：被格挡挡下的攻击伤害反弹给攻击者（ReflectPower）
+    if (opts.isAttack && target.isPlayer && absorbed > 0 && this.player.powers.reflect
+        && this._lastAttacker && this._lastAttacker.alive) {
+      const atk = this._lastAttacker;
+      this.logEvent('power', `「倒映」：将 ${absorbed} 点格挡伤害反弹给 ${atk.name}`);
+      await this.dealDamage(atk, absorbed, { source: 'player' });
+    }
 
     // 荆棘 / 火焰屏障
     if (opts.isAttack) {
@@ -908,6 +981,8 @@ export class Combat {
     if (def.canPlay && !def.canPlay(this, card)) return false;
     const cost = this.costOf(card);
     if (typeof cost === 'number' && cost > this.energy) return false;
+    const sc = this.starCostOf(card);
+    if (typeof sc === 'number' && sc > this.player.stars) return false;
     if (this.player.powers.ringing === 0) return false;
     return true;
   }
@@ -922,6 +997,10 @@ export class Combat {
     if (this.player.powers.freeSkill > 0 && card.type === 'skill') c = 0;
     if (this.player.powers.freePower > 0 && card.type === 'power') c = 0;
     if (this.player.powers.tangled && card.type === 'attack') c += 1;
+    // 剑圣：君王之剑耗能 +N（SwordSagePower）
+    if (card.id === 'SOVEREIGN_BLADE' && this.player.powers.swordSage) c += this.player.powers.swordSage;
+    // 虚空形态：每回合前 N 张牌能量为 0
+    if (this.player.powers.voidForm && this.player.voidFormUses < this.player.powers.voidForm) c = 0;
     const def = CARDS[card.id];
     if (def.costMod) c += def.costMod(card, this);
     return Math.max(0, c);
@@ -963,22 +1042,42 @@ export class Combat {
     if (idx < 0) return false;
 
     this.busy = true;
+    // 封印王座：每张牌打出前获得星愿（TheSealedThronePower.BeforeCardPlayed）
+    if (this.player.powers.sealedThrone) await this.gainStars(this.player.powers.sealedThrone);
+    if (this.finished) { this.busy = false; return false; }
     const cost = this.costOf(card);
     const isX = typeof card.cost !== 'number';
     const xValue = isX ? this.energy : 0;
+    const starCost = this.starCostOf(card);
+    const isXStar = card.stars === 'X';
+    const starXValue = isXStar ? this.player.stars : 0;
+    this.starXValue = starXValue;
     this.energy -= isX ? this.energy : cost;
     this.energySpentThisTurn += isX ? xValue : cost;
+    // 星愿是独立资源：扣费与 AfterStarsSpent 钩子都在卡牌效果之前结算（CardModel.PlayAsync）
+    if (starCost > 0) await this.spendStars(starCost);
+    if (this.finished) { this.busy = false; return false; }
+    // 虚空形态用掉一次免费名额；环绕轨道累计已花费能量
+    if (this.player.powers.voidForm && this.player.voidFormUses < this.player.powers.voidForm) this.player.voidFormUses++;
+    this.player.orbitEnergySpent += isX ? xValue : cost;
+    while (this.player.powers.orbit && this.player.orbitEnergySpent >= 4) {
+      this.player.orbitEnergySpent -= 4;
+      this.gainEnergy(this.player.powers.orbit);
+      this.logEvent('power', `「环绕轨道」：+${this.player.powers.orbit} 能量`);
+    }
     this.hand.splice(idx, 1);
     this.currentCard = card;
     this.xValue = xValue;
     this._target = targetEnemy || this.alive()[0];
     this.cardsPlayedThisTurn++;
+    this.cardsPlayedThisCombat++;
     if (card.type === 'skill') this.skillsPlayedThisTurn++;
     if (card.type === 'power') this.powersPlayedThisTurn++;
 
     const aimed = card.def.target === 'enemy' && this._target && this._target.alive ? ` → ${this._target.name}` : '';
     const costText = isX ? `X=${xValue}` : cost > 0 ? `${cost} 能量` : '免费';
-    this.logEvent('play', `打出「${card.name}」（${costText}）${aimed}`, { card: card.id });
+    const starText = starCost > 0 ? ` · ${starCost} 星愿${isXStar ? `(X=${starXValue})` : ''}` : '';
+    this.logEvent('play', `打出「${card.name}」（${costText}${starText}）${aimed}`, { card: card.id });
 
     this.emit();
     await this.wait(60);
@@ -1022,6 +1121,17 @@ export class Combat {
     for (let r = 0; r < replay; r++) {
       if (this.finished) break;
       await card.def.play(this, card);
+    }
+
+    // 独白：本回合每打出一张牌获得力量（回合末统一回收，等价临时力量）
+    if (this.player.powers.monologue && !this.finished) {
+      await this.addPower('strengthTemp', this.player.powers.monologue);
+    }
+    // 暗淡蓝点：一回合内打出满 5 张牌时，下回合额外抽牌（每回合只触发一次）
+    if (this.player.powers.paleBlueDot && !this.player.paleBlueDotTriggered
+        && this.cardsPlayedThisTurn >= 5 && !this.finished) {
+      this.player.paleBlueDotTriggered = true;
+      await this.addPower('drawNextTurn', this.player.powers.paleBlueDot);
     }
 
     // 雷暴 / 子程序：每打出一张能力牌触发
@@ -1188,10 +1298,11 @@ export class Combat {
     this.emit();
   }
 
-  addCardToHand(card) {
+  addCardToHand(card, generated = false) {
     if (this.hand.length < 10) this.hand.push(card);
     else this.discardPile.push(card);
     this.emit();
+    if (!generated) this.onCardGenerated(card);
   }
 
   async addCard(id, pile = 'discard', upgraded = false, times = 1) {
@@ -1199,10 +1310,11 @@ export class Combat {
     for (let i = 0; i < times; i++) {
       const c = makeCard(id, upgraded);
       c.freeThisTurn = true;
-      if (pile === 'hand') this.addCardToHand(c);
+      if (pile === 'hand') this.addCardToHand(c, true);
       else if (pile === 'draw') this.drawPile.push(c);
       else this.discardPile.push(c);
       out.push(c);
+      this.onCardGenerated(c);
       if (CARDS[id]?.type === 'status') await this.onStatusGenerated(c);
     }
     this.emit();
@@ -1231,7 +1343,10 @@ export class Combat {
       .filter(d => !d.char || d.char === 'NEUTRAL' || d.char === this.run.charId)
       .map(d => d.id);
     if (!ids.length) return null;
-    return makeCard(this.rng.pick(ids));
+    const card = makeCard(this.rng.pick(ids));
+    // 本复刻没有独立的「无色牌池」，随机生成的牌按无色牌处理（武器库 / 君王矿石 / 光谱偏移）
+    card.colorless = true;
+    return card;
   }
 
   upgradeCard(card) {
@@ -1277,6 +1392,120 @@ export class Combat {
     this.energy += n;
     this.emit();
     this.energyGained = true;
+  }
+
+  /* ---------------- 储君：星愿（Stars）与铸造（Forge） ----------------
+   * 对照 sts2-sim：
+   *  - Entities/Players/PlayerCombatState.cs   Stars 不随回合重置，只有 Gain/Lose 改动
+   *  - Models/CardModel.cs                    StarCost / ResolveStarCost / X 星费 = 当前星愿数
+   *  - Commands/PlayerCmd.cs                  GainStars 后 Hook.AfterStarsGained
+   *  - Commands/ForgeCmd.cs                  没有君王之剑就生成一张，然后给所有君王之剑 AddDamage
+   *  - Models/Powers/{BlackHole,ChildOfTheStars,StarNextTurn,Genesis,TheSealedThrone}Power.cs
+   */
+  starCostOf(card) {
+    let s = card.stars ?? 0;
+    if (typeof s !== 'number') return this.player.stars; // X 星费：花光当前星愿
+    // 虚空形态：每回合前 N 张牌能量与星愿都免费（VoidFormPower.TryModify*Cost）
+    if (this.player.powers.voidForm && this.player.voidFormUses < this.player.powers.voidForm) s = 0;
+    return Math.max(0, s);
+  }
+
+  async gainStars(n) {
+    n = Math.max(0, Math.floor(n || 0));
+    if (!n || this.finished) return;
+    this.player.stars += n;
+    this.player.starsGainedThisTurn += n;
+    this.logEvent('power', `获得 ${n} 点星愿（现有 ${this.player.stars}）`);
+    this.float(this.player, '+' + n + ' 星愿', 'buff');
+    this.emit();
+    if (this.player.powers.blackHole) await this.damageAllEnemiesRaw(this.player.powers.blackHole);
+  }
+
+  async spendStars(n) {
+    n = Math.max(0, Math.floor(n || 0));
+    if (!n) return;
+    const spent = Math.min(n, this.player.stars);
+    if (!spent) return;
+    this.player.stars -= spent;
+    this.player.starsSpentThisTurn += spent;
+    this.player.starsSpentThisCombat += spent;
+    this.logEvent('power', `花费 ${spent} 点星愿（剩余 ${this.player.stars}）`);
+    this.emit();
+    // 群星之子：每花费 1 点星愿给 N 点格挡（ChildOfTheStarsPower.AfterStarsSpent）
+    if (this.player.powers.childOfTheStars) {
+      await this.block(this.player.powers.childOfTheStars * spent, { raw: true, silent: true });
+    }
+    // 黑洞：花费星愿时也触发一次全体伤害
+    if (this.player.powers.blackHole) await this.damageAllEnemiesRaw(this.player.powers.blackHole);
+    // 迷你储君：每回合第一次花费星愿 → +1 力量
+    if (this.run.relics.includes('MINI_REGENT') && !this.player.miniRegentUsed) {
+      this.player.miniRegentUsed = true;
+      await this.addPower('strength', 1);
+    }
+    // 星系尘埃：每累计花费 10 点星愿 → 10 点格挡
+    if (this.run.relics.includes('GALACTIC_DUST')) {
+      this.player.galacticDustStars += spent;
+      const triggers = Math.floor(this.player.galacticDustStars / 10);
+      if (triggers > 0) {
+        this.player.galacticDustStars %= 10;
+        await this.block(10 * triggers, { raw: true, silent: true });
+      }
+    }
+  }
+
+  addVigor(n) {
+    this.player.vigor = (this.player.vigor || 0) + Math.max(0, Math.floor(n || 0));
+    this.logEvent('power', `获得 ${n} 点活力`);
+    this.float(this.player, '+' + n + ' 活力', 'buff');
+    this.emit();
+  }
+
+  /** 铸造：生成/强化「君王之剑」（ForgeCmd.Forge） */
+  async forge(n) {
+    n = Math.floor(n || 0);
+    if (!n || this.finished) return;
+    const active = [this.drawPile, this.hand, this.discardPile, this.powerPile]
+      .flat().filter(c => c && c.id === 'SOVEREIGN_BLADE');
+    if (!active.length) {
+      const made = await this.addCard('SOVEREIGN_BLADE', 'hand');
+      const blade = made[0];
+      blade.freeThisTurn = false;   // 生成的君王之剑不享受「本回合免费」
+      active.push(blade);
+      this.logEvent('system', '铸造：生成「君王之剑」');
+    }
+    // 消耗堆里的君王之剑同样被强化（ForgeCmd 传 includeExhausted: true）
+    const all = active.concat(this.exhaustPile.filter(c => c.id === 'SOVEREIGN_BLADE'));
+    for (const b of all) b.bonus = (b.bonus || 0) + n;
+    this.logEvent('power', `铸造 +${n}：「君王之剑」现在造成 ${10 + (all[0].bonus || 0)} 点伤害`);
+    this.emit();
+  }
+
+  /** 黑洞用的全体固定伤害：不吃力量/虚弱/易伤（ValueProp.Unpowered） */
+  async damageAllEnemiesRaw(n) {
+    for (const e of this.alive()) {
+      if (this.finished) break;
+      await this.dealDamage(e, n, { source: 'player' });
+    }
+  }
+
+  /** 每生成一张牌的钩子：创世之柱 / 武器库 / 君王矿石 */
+  onCardGenerated(card) {
+    this.cardsGeneratedThisCombat++;
+    if (this.finished) return;
+    if (this.player.powers.pillarOfCreation) {
+      const b = this.player.powers.pillarOfCreation;
+      this.player.block += b;
+      this.logEvent('block', `「创世之柱」：获得 ${b} 点格挡`);
+    }
+    if (card.colorless) {
+      if (this.player.powers.arsenal) this.addPower('strength', this.player.powers.arsenal);
+      if (this.run.relics.includes('REGALITE') && !this.player.regaliteUsed) {
+        this.player.regaliteUsed = true;
+        this.player.block += 4;
+        this.logEvent('block', '「君王矿石」：获得 4 点格挡');
+      }
+    }
+    this.emit();
   }
 
   async choose(opts) {
@@ -1371,6 +1600,8 @@ export class Combat {
     // 融入暗影 / 墨之刃只持续本回合
     delete this.player.powers.shadowmeld;
     delete this.player.powers.inkBlade;
+    // 「倒映」要覆盖紧接着的敌人回合，所以不在玩家回合结束移除，见 startPlayerTurn()
+    // 敌人身上的「征服者」在其一方回合结束时递减，见 enemyTurn()
 
     // 虚无：回合结束时还留在手里的牌直接消耗（不分是否保留手牌）
     for (const card of [...this.hand]) {
@@ -1378,9 +1609,17 @@ export class Combat {
     }
     if (this.finished) return;
 
-    // 弃手牌（符文金字塔全保留；计划妥当按费用保留；幻影之刃让小刀保留）
-    if (!this.run.relics.includes('RUNIC_PYRAMID')) {
+    // 弃手牌（符文金字塔 / 保留手牌全保留；计划妥当按费用保留；带「保留」的单卡也留）
+    const retainAll = this.run.relics.includes('RUNIC_PYRAMID') || this.player.powers.retainHand > 0;
+    if (retainAll) {
+      if (this.player.powers.retainHand > 0) {
+        this.player.powers.retainHand--;
+        if (this.player.powers.retainHand <= 0) delete this.player.powers.retainHand;
+        this.logEvent('power', '「保留手牌」：本回合手牌不弃置');
+      }
+    } else {
       const keep = [];
+      for (const c of this.hand) if (c.retain) keep.push(c);
       if (this.player.powers.wellLaidPlans) {
         const cand = [...this.hand].filter(c => c.id !== 'SHIV').sort((a, b) => (b.cost ?? 0) - (a.cost ?? 0));
         keep.push(...cand.slice(0, this.player.powers.wellLaidPlans));
@@ -1433,7 +1672,7 @@ export class Combat {
         if (!e.alive) { this.emit(); await this.wait(80); continue; }
         if (e.powers.ritual) await this.enemyPower(e, 'strength', e.powers.ritual);
         if (e.powers.plating) { e.block += e.powers.plating; }
-        for (const k of ['vulnerable', 'weak', 'frail', 'shrink', 'tangled']) {
+        for (const k of ['vulnerable', 'weak', 'frail', 'shrink', 'tangled', 'conqueror']) {
           if (e.powers[k] != null) {
             e.powers[k]--;
             if (e.powers[k] <= 0) delete e.powers[k];
@@ -1522,6 +1761,11 @@ export class Combat {
     for (const rid of this.run.relics) {
       const r = RELICS[rid];
       if (r?.onCombatEnd) await r.onCombatEnd(this, r);
+    }
+    // 王国资产：战斗胜利时按能力层数给金币（RoyaltiesPower.ModifyRewards）
+    if (this.won && this.player.powers.royalties > 0) {
+      this.run.gold += this.player.powers.royalties;
+      this.logEvent('system', `「王国资产」：获得 ${this.player.powers.royalties} 金币`);
     }
   }
 

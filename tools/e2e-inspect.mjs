@@ -7,7 +7,7 @@ page.on('pageerror', e => errs.push(e.message));
 page.on('console', m => { if (m.type() === 'error') errs.push('console: ' + m.text()); });
 page.on('response', r => { if (r.status() >= 400) console.log('BAD', r.status(), r.url()); });
 
-await page.goto('http://localhost:8081/index.html', { waitUntil: 'load' });
+await page.goto(`http://localhost:${process.env.PORT || 8081}/index.html`, { waitUntil: 'load' });
 await page.click('[data-act="new"]'); await page.waitForTimeout(250);
 await page.click('[data-char="IRONCLAD"]'); await page.waitForTimeout(200);
 await page.click('#asc-list .choice'); await page.waitForTimeout(200);

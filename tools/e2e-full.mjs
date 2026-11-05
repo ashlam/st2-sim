@@ -8,7 +8,7 @@ const errors = [];
 page.on('pageerror', e => errors.push('PAGEERROR: ' + e.message));
 page.on('console', m => { if (m.type() === 'error' && !m.text().includes('404')) errors.push('CONSOLE: ' + m.text()); });
 
-await page.goto('http://localhost:8081/index.html', { waitUntil: 'load' });
+await page.goto(`http://localhost:${process.env.PORT || 8081}/index.html`, { waitUntil: 'load' });
 await page.click('[data-act="new"]'); await page.waitForTimeout(250); await page.click('[data-char="IRONCLAD"]');
 await page.click('#asc-list .choice');
 await page.waitForTimeout(200);
