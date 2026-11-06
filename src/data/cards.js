@@ -550,6 +550,7 @@ delete CARDS.THRASH_UNUSED;
 import { SILENT_CARDS, SHIV } from './cards-silent.js';
 import { DEFECT_CARDS, FUEL, VOID } from './cards-defect.js';
 import { NECRO_CARDS, SOUL, SWEEPING_GAZE } from './cards-necro.js';
+import { REGENT_CARDS, SOVEREIGN_BLADE } from './cards-regent.js';
 
 for (const [id, def] of Object.entries(SILENT_CARDS)) CARDS[id] = def;
 CARDS.SHIV = SHIV;
@@ -559,6 +560,8 @@ CARDS.VOID = VOID;
 for (const [id, def] of Object.entries(NECRO_CARDS)) CARDS[id] = def;
 CARDS.SOUL = SOUL;
 CARDS.SWEEPING_GAZE = SWEEPING_GAZE;
+for (const [id, def] of Object.entries(REGENT_CARDS)) CARDS[id] = def;
+CARDS.SOVEREIGN_BLADE = SOVEREIGN_BLADE;
 
 // 没标 char 的都是铁甲战士的牌（含状态/诅咒；这两类不进奖励池，标 NEUTRAL 便于过滤）
 for (const def of Object.values(CARDS)) {
@@ -588,7 +591,15 @@ export function makeCard(id, upgraded = false) {
     set retain(v) { this._retain = !!v; },
     get exhaustOnPlay() { return !!def.exhaustOnPlay && !(upgraded && def.noExhaustOnUpgrade); },
     get innate() { return !!(def.innate || (upgraded && def.innateOnUpgrade)); },
+    get retain() { return !!def.retain; },
     get tags() { return def.tags || []; },
+    /** 星愿费用（储君第二资源）。不随 freeThisTurn 归零，免费由 voidForm 在 starCostOf 里处理 */
+    get stars() {
+      let s = def.stars ?? 0;
+      if (typeof s !== 'number') return s; // 'X'
+      if (upgraded && typeof def.upgradeStars === 'number') s = def.upgradeStars;
+      return Math.max(0, s);
+    },
     get cost() {
       let c = def.cost;
       if (typeof c !== 'number') return c; // X

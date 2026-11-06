@@ -1,8 +1,9 @@
 /**
  * 亡灵契约师 UI 端到端：选人 → 战斗（奥斯提栏）→ 禁忌魔典战后移除
- * 需要先在 8081 端口起服务：PORT=8081 node tools/serve.mjs
+ * 需要先在 8081 端口起服务：PORT=8081 node tools/serve.mjs（可用 PORT 环境变量换端口）
  */
 import { chromium } from 'playwright-core';
+const PORT = process.env.PORT || '8081';
 const CHROME = 'C://Program Files\\Google\\Chrome\\Application\\chrome.exe';
 const browser = await chromium.launch({ executablePath: CHROME, headless: true });
 const ctx = await browser.newContext({ viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
@@ -15,7 +16,7 @@ let pass = 0;
 const fails = [];
 const ok = (cond, label, extra = '') => { if (cond) pass++; else fails.push(label + (extra ? ` — ${extra}` : '')); };
 
-await page.goto('http://localhost:8081/index.html', { waitUntil: 'load' });
+await page.goto(`http://localhost:${PORT}/index.html`, { waitUntil: 'load' });
 await page.waitForTimeout(300);
 await page.click('[data-act="new"]'); await page.waitForTimeout(250);
 ok(await page.$('[data-char="NECROBINDER"]') !== null, '选人界面有亡灵契约师');

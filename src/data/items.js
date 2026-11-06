@@ -133,47 +133,90 @@ export const RELICS = {
 
   /* ---------- 亡灵契约师 ---------- */
   BOUND_PHYLACTERY: {
-    name: '缚魂命匣', icon: '⚱️', rarity: 'starter',
+    name: '缚魂命匣', icon: '⚱️', rarity: 'starter', char: 'NECROBINDER',
     desc: '战斗开始时召唤1。你的第2回合起，每回合开始时再召唤1。',
     onCombatStart: async (C) => { if (C.necro) await C.necro.summon(1); },
     onTurnStart: async (C, turn) => { if (C.necro && turn > 1) await C.necro.summon(1); },
   },
   BONE_FLUTE: {
-    name: '骨笛', icon: '🦴', rarity: 'common',
+    name: '骨笛', icon: '🦴', rarity: 'common', char: 'NECROBINDER',
     desc: '每当奥斯提攻击时，获得2点格挡。',
   },
   FUNERARY_MASK: {
-    name: '葬礼面具', icon: '🎭', rarity: 'uncommon',
+    name: '葬礼面具', icon: '🎭', rarity: 'uncommon', char: 'NECROBINDER',
     desc: '战斗开始时，将3张灵魂洗入你的抽牌堆。',
   },
   BOOK_REPAIR_KNIFE: {
-    name: '修书小刀', icon: '🔪', rarity: 'uncommon',
+    name: '修书小刀', icon: '🔪', rarity: 'uncommon', char: 'NECROBINDER',
     desc: '每当有一名不是爪牙的敌人死于灾厄时，回复3点生命。',
   },
   BIG_HAT: {
-    name: '大帽子', icon: '🎩', rarity: 'rare',
+    name: '大帽子', icon: '🎩', rarity: 'rare', char: 'NECROBINDER',
     desc: '战斗开始时，将2张随机虚无牌加入你的手牌。',
   },
   BOOKMARK: {
-    name: '书签', icon: '🔖', rarity: 'rare',
+    name: '书签', icon: '🔖', rarity: 'rare', char: 'NECROBINDER',
     desc: '每回合结束时，随机一张被保留的牌在被打出前的耗能减少1。',
   },
   IVORY_TILE: {
-    name: '象牙麻将牌', icon: '🀄', rarity: 'rare',
+    name: '象牙麻将牌', icon: '🀄', rarity: 'rare', char: 'NECROBINDER',
     desc: '每当你打出一张耗能大于等于3的牌时，获得1点能量。',
   },
   UNDYING_SIGIL: {
-    name: '不死符文', icon: '🕯️', rarity: 'shop',
+    name: '不死符文', icon: '🕯️', rarity: 'shop', char: 'NECROBINDER',
     desc: '当敌人的灾厄层数大于等于其生命值时，它造成的伤害降低50%。',
+  },
+  /* ---- 储君专属遗物：RegentRelicPool（v0.111.0，8 件） ---- */
+  DIVINE_RIGHT: {
+    name: '天赋君权', icon: '👑', rarity: 'starter', char: 'REGENT',
+    desc: '每场战斗开始时，获得3点[gold]星愿[/gold]。',
+    onCombatStart: async (C) => { await C.gainStars(3); },
+  },
+  FENCING_MANUAL: {
+    name: '击剑指南', icon: '📖', rarity: 'common', char: 'REGENT',
+    desc: '每场战斗开始时，[gold]铸造[/gold]10。',
+    onTurnStart: async (C, turn) => { if (turn === 1) await C.forge(10); },
+  },
+  GALACTIC_DUST: {
+    name: '星系尘埃', icon: '✨', rarity: 'uncommon', char: 'REGENT',
+    desc: '每累计花费10点[gold]星愿[/gold]，获得10点[gold]格挡[/gold]。',
+  },
+  REGALITE: {
+    name: '君王矿石', icon: '💠', rarity: 'uncommon', char: 'REGENT',
+    desc: '每回合第一次生成无色牌时，获得4点[gold]格挡[/gold]。',
+  },
+  LUNAR_PASTRY: {
+    name: '月亮糕点', icon: '🌙', rarity: 'rare', char: 'REGENT',
+    desc: '在你的回合结束时，获得1点[gold]星愿[/gold]。',
+    onTurnEnd: async (C) => { await C.gainStars(1); },
+  },
+  MINI_REGENT: {
+    name: '迷你储君', icon: '🧸', rarity: 'rare', char: 'REGENT',
+    desc: '每回合第一次花费[gold]星愿[/gold]时，获得1点[gold]力量[/gold]。',
+  },
+  ORANGE_DOUGH: {
+    name: '橙色团块', icon: '🍊', rarity: 'rare', char: 'REGENT',
+    desc: '每场战斗开始时，将2张随机无色牌加入你的手牌。',
+    onTurnStart: async (C, turn) => {
+      if (turn !== 1) return;
+      for (let i = 0; i < 2; i++) {
+        const card = C.randomCardOfType('skill');
+        if (card) { card.colorless = true; C.addCardToHand(card); }
+      }
+    },
+  },
+  VITRUVIAN_MINION: {
+    name: '维特鲁威仆从', icon: '🗿', rarity: 'shop', char: 'REGENT',
+    desc: '带「仆从」标签的卡牌造成双倍的伤害与[gold]格挡[/gold]。',
   },
 };
 
 export const RELIC_POOLS = {
-  common: ['VAJRA', 'BAG_OF_MARBLES', 'ANCHOR', 'BLOOD_VIAL', 'LANTERN', 'ODDLY_SMOOTH_STONE', 'BAG_OF_PREPARATION', 'HAPPY_FLOWER', 'BONE_FLUTE'],
-  uncommon: ['AKABEKO', 'BRONZE_SCALES', 'MEAT_ON_THE_BONE', 'ORICHALCUM', 'PEN_NIB', 'KUNAI', 'SHURIKEN', 'ART_OF_WAR', 'GIRYA', 'ETERNAL_FEATHER', 'FUNERARY_MASK', 'BOOK_REPAIR_KNIFE'],
-  rare: ['ICE_CREAM', 'JUZU_BRACELET', 'BIG_HAT', 'BOOKMARK', 'IVORY_TILE'],
+  common: ['VAJRA', 'BAG_OF_MARBLES', 'ANCHOR', 'BLOOD_VIAL', 'LANTERN', 'ODDLY_SMOOTH_STONE', 'BAG_OF_PREPARATION', 'HAPPY_FLOWER', 'BONE_FLUTE', 'FENCING_MANUAL'],
+  uncommon: ['AKABEKO', 'BRONZE_SCALES', 'MEAT_ON_THE_BONE', 'ORICHALCUM', 'PEN_NIB', 'KUNAI', 'SHURIKEN', 'ART_OF_WAR', 'GIRYA', 'ETERNAL_FEATHER', 'FUNERARY_MASK', 'BOOK_REPAIR_KNIFE', 'GALACTIC_DUST', 'REGALITE'],
+  rare: ['ICE_CREAM', 'JUZU_BRACELET', 'BIG_HAT', 'BOOKMARK', 'IVORY_TILE', 'LUNAR_PASTRY', 'MINI_REGENT', 'ORANGE_DOUGH'],
   boss: ['SNECKO_EYE', 'RUNIC_PYRAMID', 'SOZU', 'PHILOSOPHERS_STONE'],
-  shop: ['AKABEKO', 'BRONZE_SCALES', 'ORICHALCUM', 'PEN_NIB', 'KUNAI', 'SHURIKEN', 'ICE_CREAM', 'UNDYING_SIGIL'],
+  shop: ['AKABEKO', 'BRONZE_SCALES', 'ORICHALCUM', 'PEN_NIB', 'KUNAI', 'SHURIKEN', 'ICE_CREAM', 'UNDYING_SIGIL', 'VITRUVIAN_MINION', 'GALACTIC_DUST'],
 };
 
 /* ================= 药水 ================= */
@@ -233,15 +276,15 @@ export const POTIONS = {
 
   /* ---------- 亡灵契约师 ---------- */
   POTION_OF_DOOM: {
-    name: '灾厄药水', icon: '☠️', rarity: 'common', target: 'enemy', desc: '给予33层灾厄。',
+    name: '灾厄药水', icon: '☠️', rarity: 'common', target: 'enemy', char: 'NECROBINDER', desc: '给予33层灾厄。',
     use: async (C) => { if (C.necro) await C.necro.addDoom(33, C.target); },
   },
   POT_OF_GHOULS: {
-    name: '尸鬼瓮', icon: '🏺', rarity: 'rare', target: 'self', desc: '将2张灵魂加入你的手牌。',
+    name: '尸鬼瓮', icon: '🏺', rarity: 'rare', target: 'self', char: 'NECROBINDER', desc: '将2张灵魂加入你的手牌。',
     use: async (C) => { if (C.necro) await C.necro.addSoul(2, 'hand'); },
   },
   BONE_BREW: {
-    name: '骨头酿', icon: '🧴', rarity: 'uncommon', target: 'self', desc: '召唤15。',
+    name: '骨头酿', icon: '🧴', rarity: 'uncommon', target: 'self', char: 'NECROBINDER', desc: '召唤15。',
     use: async (C) => { if (C.necro) await C.necro.summon(15); },
   },
 };

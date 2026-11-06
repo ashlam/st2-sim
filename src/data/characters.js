@@ -73,9 +73,13 @@ export const CHARACTERS = [
     gold: 99,
     relic: 'DIVINE_RIGHT',
     relicName: '天赋君权',
-    deck: [],
+    deck: [
+      'STRIKE_REGENT', 'STRIKE_REGENT', 'STRIKE_REGENT', 'STRIKE_REGENT',
+      'DEFEND_REGENT', 'DEFEND_REGENT', 'DEFEND_REGENT', 'DEFEND_REGENT',
+      'FALLING_STAR', 'VENERATE',
+    ],
     desc: '群星王座的继承人。\n拥有宇宙的力量，但总是让他的仆从们去做各种事情。',
-    playable: false,
+    playable: true,
     accent: '#b08a3e',
   },
   {

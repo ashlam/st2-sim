@@ -36,8 +36,14 @@ function cardHTML(card, opts = {}) {
   const disabled = opts.disabled ? ' disabled' : '';
   const sel = opts.selected ? ' selected' : '';
   const up = card.upgraded ? ' upgraded' : '';
+  // 星愿费用（储君第二资源）：X 星费牌面固定显示 X，战斗里显示实际数值用星愿 HUD
+  const rawStars = card.stars ?? 0;
+  const starView = rawStars === 'X' ? 'X' : (opts.combat ? opts.combat.starCostOf(card) : rawStars);
+  const starBadge = (rawStars && rawStars !== 0)
+    ? `<div class="card-stars">✦${starView}</div>` : '';
   return `<div class="card ${card.type}${up}${disabled}${sel}" data-uid="${card.uid}" data-card="1">
     <div class="card-cost${cost === 0 ? ' free' : ''}${typeof cost === 'number' && cost < 0 ? ' none' : ''}">${cost === 'X' ? 'X' : (typeof cost === 'number' && cost < 0 ? '—' : cost)}</div>
+    ${starBadge}
     <div class="card-name">${esc(card.name)}${card.upgraded ? '+' : ''}</div>
     <div class="card-text">${fmtText(def, card, opts.combat)}</div>
     <div class="card-type">${typeLabel}</div>
@@ -465,7 +471,8 @@ export class App {
     const upText = fmtText(def, upCard, null);
     const typeLabel = { attack: '攻击', skill: '技能', power: '能力', status: '状态', curse: '诅咒' }[def.type] || '';
     const rarityLabel = { common: '普通', uncommon: '罕见', rare: '稀有', starter: '初始', basic: '初始', status: '状态', curse: '诅咒' }[def.rarity] || '';
-    const sub = [typeLabel, rarityLabel, typeof def.cost === 'number' ? `${def.cost} 费` : 'X 费'].filter(Boolean).join(' · ');
+    const starLabel = def.stars ? ` · ✦ ${def.stars === 'X' ? 'X' : def.stars} 星愿` : '';
+    const sub = [typeLabel, rarityLabel, typeof def.cost === 'number' ? `${def.cost} 费` : 'X 费'].filter(Boolean).join(' · ') + starLabel;
     const body = `
       <div class="kw-cardwrap">${cardHTML(card)}</div>
       <p class="kw-p">${baseText}</p>
@@ -557,6 +564,7 @@ export class App {
       <div class="kw-row"><b>生命</b><span>${Math.max(0, p.hp)} / ${p.maxHp}</span></div>
       <div class="kw-row"><b>格挡</b><span>${p.block}</span></div>
       <div class="kw-row"><b>能量</b><span>${c.energy} · 回合 ${c.turn}</span></div>
+      ${run.charId === 'REGENT' ? `<div class="kw-row"><b>星愿</b><span>✦ ${p.stars}</span></div>` : ''}
       <div class="kw-sec">状态</div>
       ${Object.keys(p.powers).length || p.tempStr
         ? `<div class="pows" style="margin-top:4px">${powHTML(p.powers, 'player')}${p.tempStr ? `<span class="pw buff" data-kw-kind="power" data-kw-id="strengthTemp" data-kw-owner="player">临时力量<b>${p.tempStr}</b></span>` : ''}</div>
@@ -617,7 +625,7 @@ export class App {
       ${card.upgraded ? '<div class="kw-note">这张牌已经升级过了。</div>' : ''}`;
     this.showInfo({
       title: `${card.name}${card.upgraded ? '+' : ''}`,
-      sub: `${typeLabel}${typeof card.cost === 'number' ? ` · ${card.cost} 费` : ' · X 费'}`,
+      sub: `${typeLabel}${typeof card.cost === 'number' ? ` · ${card.cost} 费` : ' · X 费'}${card.stars ? ` · ✦ ${card.stars === 'X' ? 'X' : card.stars} 星愿` : ''}`,
       body,
     });
   }
@@ -734,6 +742,7 @@ export class App {
         </div>
         <div class="action-bar">
           <div class="energy" title="能量" data-kw-kind="term" data-kw-id="energy">${c.energy}</div>
+          ${run.charId === 'REGENT' ? `<div class="stars-hud" title="星愿" data-kw-kind="term" data-kw-id="stars">✦ ${c.player.stars}</div>` : ''}
           <div class="pile-chip" data-pile="draw">抽牌<b>${c.drawPile.length}</b></div>
           <div class="pile-chip" data-pile="discard">弃牌<b>${c.discardPile.length}</b></div>
           <div class="spacer"></div>
@@ -783,7 +792,9 @@ export class App {
     if (!card) return;
     if (!c.canPlay(card)) {
       const cost = c.costOf(card);
-      this.toast(typeof cost === 'number' ? '能量不足' : '无法打出');
+      if (c.starCostOf(card) > c.player.stars) this.toast('星愿不足');
+      else if (typeof cost === 'number' && cost > c.energy) this.toast('能量不足');
+      else this.toast('无法打出');
       return;
     }
     if (this.selectedCard && this.selectedCard.uid === uid) {

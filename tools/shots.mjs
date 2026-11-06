@@ -3,7 +3,7 @@ const b = await chromium.launch({ executablePath: 'C://Program Files\\Google\\Ch
 const ctx = await b.newContext({ viewport: { width: 390, height: 844 }, deviceScaleFactor: 2, serviceWorkers: 'block' });
 const page = await ctx.newPage();
 page.on('pageerror', e => console.log('ERR', e.message));
-await page.goto('http://localhost:8081/index.html', { waitUntil: 'load' });
+await page.goto(`http://localhost:${process.env.PORT || 8081}/index.html`, { waitUntil: 'load' });
 await page.click('[data-act="new"]'); await page.waitForTimeout(250); await page.click('[data-char="IRONCLAD"]');
 await page.click('#asc-list .choice');
 await page.waitForTimeout(150);

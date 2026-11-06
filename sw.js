@@ -1,9 +1,9 @@
-const CACHE = 'sts2sim-v10';
+const CACHE = 'sts2sim-v11';
 const ASSETS = [
   './', './index.html', './styles.css', './manifest.webmanifest',
   './src/main.js', './src/ui/app.js', './src/ui/inspect.js',
   './src/engine/combat.js', './src/engine/run.js', './src/engine/map.js', './src/engine/rng.js', './src/engine/necro.js',
-  './src/data/cards.js', './src/data/cards-silent.js', './src/data/cards-defect.js', './src/data/cards-necro.js', './src/data/orbs.js', './src/data/enemies.js', './src/data/items.js', './src/data/powers.js', './src/data/events.js', './src/data/characters.js', './src/data/glossary.js',
+  './src/data/cards.js', './src/data/cards-silent.js', './src/data/cards-defect.js', './src/data/cards-necro.js', './src/data/cards-regent.js', './src/data/orbs.js', './src/data/enemies.js', './src/data/items.js', './src/data/powers.js', './src/data/events.js', './src/data/characters.js', './src/data/glossary.js',
   './icon.png'
 ];
 

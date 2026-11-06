@@ -8,7 +8,7 @@ const errs = [];
 page.on('pageerror', e => errs.push('pageerror: ' + e.message));
 page.on('console', m => { if (m.type() === 'error') errs.push('console: ' + m.text()); });
 
-await page.goto('http://localhost:8081/index.html', { waitUntil: 'load' });
+await page.goto(`http://localhost:${process.env.PORT || 8081}/index.html`, { waitUntil: 'load' });
 await page.click('[data-act="new"]');
 await page.waitForTimeout(250);
 await page.click('[data-char="DEFECT"]');

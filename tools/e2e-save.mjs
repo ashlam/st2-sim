@@ -5,7 +5,7 @@ const page = await ctx.newPage();
 const errs = [];
 page.on('pageerror', e => errs.push(e.message));
 page.on('console', m => { if (m.type() === 'error' && !m.text().includes('404')) errs.push(m.text()); });
-await page.goto('http://localhost:8081/index.html', { waitUntil: 'load' });
+await page.goto(`http://localhost:${process.env.PORT || 8081}/index.html`, { waitUntil: 'load' });
 await page.click('[data-act="new"]'); await page.waitForTimeout(250); await page.click('[data-char="IRONCLAD"]');
 await page.waitForTimeout(300);
 await page.click('#asc-list .choice >> nth=9');   // 野心 9

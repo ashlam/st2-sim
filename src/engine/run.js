@@ -92,9 +92,26 @@ export class Run {
 
   rollPotion() {
     if (this.asc >= 7 && this.rng.chance(0.25)) return null;
+    const tier = this.rollPotionTier();
+    const pool = POTION_POOL[tier].filter(id => this.potionAllowed(id));
+    return pool.length ? this.rng.pick(pool) : null;
+  }
+
+  rollPotionTier() {
     const r = this.rng.next();
-    const tier = r < 0.65 ? 'common' : r < 0.92 ? 'uncommon' : 'rare';
-    return this.rng.pick(POTION_POOL[tier]);
+    return r < 0.65 ? 'common' : r < 0.92 ? 'uncommon' : 'rare';
+  }
+
+  /** 角色专属药水同样只在对应角色的局里出现（如亡灵契约师的灾厄药水/骨头酿） */
+  potionAllowed(id) {
+    const p = POTIONS[id];
+    return !!p && (!p.char || p.char === this.charId);
+  }
+
+  /** 角色专属遗物只在对应角色的局里出现（原作每个角色有自己的 relic pool） */
+  relicAllowed(id) {
+    const r = RELICS[id];
+    return !!r && (!r.char || r.char === this.charId);
   }
 
   rollRelic(tier = null) {
@@ -103,14 +120,14 @@ export class Run {
       const r = this.rng.next();
       t = r < 0.5 ? 'common' : r < 0.83 ? 'uncommon' : 'rare';
     }
-    let pool = (RELIC_POOLS[t] || []).filter(id => !this.relics.includes(id));
-    if (!pool.length) pool = RELIC_POOLS.common.filter(id => !this.relics.includes(id));
-    if (!pool.length) pool = RELIC_POOLS.uncommon.filter(id => !this.relics.includes(id));
+    let pool = (RELIC_POOLS[t] || []).filter(id => !this.relics.includes(id) && this.relicAllowed(id));
+    if (!pool.length) pool = RELIC_POOLS.common.filter(id => !this.relics.includes(id) && this.relicAllowed(id));
+    if (!pool.length) pool = RELIC_POOLS.uncommon.filter(id => !this.relics.includes(id) && this.relicAllowed(id));
     return pool.length ? this.rng.pick(pool) : null;
   }
 
   rollBossRelic() {
-    const pool = RELIC_POOLS.boss.filter(id => !this.relics.includes(id));
+    const pool = RELIC_POOLS.boss.filter(id => !this.relics.includes(id) && this.relicAllowed(id));
     return pool.length ? this.rng.pick(pool) : null;
   }
 
@@ -190,7 +207,7 @@ export class Run {
     const relics = [];
     const relicTiers = ['common', 'uncommon', 'shop'];
     for (const tier of relicTiers) {
-      const pool = (RELIC_POOLS[tier] || []).filter(x => !this.relics.includes(x) && !relics.some(r => r.id === x));
+      const pool = (RELIC_POOLS[tier] || []).filter(x => !this.relics.includes(x) && !relics.some(r => r.id === x) && this.relicAllowed(x));
       if (!pool.length) continue;
       const id = this.rng.pick(pool);
       const base = tier === 'common' ? this.rng.range(143, 157) : tier === 'uncommon' ? this.rng.range(232, 265) : this.rng.range(280, 320);
@@ -209,9 +226,9 @@ export class Run {
   }
 
   rollPotionForShop() {
-    const r = this.rng.next();
-    const tier = r < 0.65 ? 'common' : r < 0.92 ? 'uncommon' : 'rare';
-    return this.rng.pick(POTION_POOL[tier]);
+    const tier = this.rollPotionTier();
+    const pool = POTION_POOL[tier].filter(id => this.potionAllowed(id));
+    return pool.length ? this.rng.pick(pool) : null;
   }
 
   priceWithAsc(base) {
