@@ -61,6 +61,25 @@ function powHTML(powers, owner = '') {
   }).join('');
 }
 
+/** 奥斯提栏：只在它出现过之后显示，倒下后留场并置灰 */
+function ostyRow(combat) {
+  const n = combat.necro;
+  if (!n || !n.osty.exists) return '';
+  const o = n.osty;
+  const alive = n.ostyAlive;
+  const pct = o.maxHp > 0 ? Math.max(0, (o.hp / o.maxHp) * 100) : 0;
+  return `<div class="osty-row ${alive ? '' : 'dead'}" data-kw-kind="term" data-kw-id="osty">
+    <div class="osty-icon">${alive ? '🦴' : '💀'}</div>
+    <div class="osty-body">
+      <div class="osty-top">
+        <span class="osty-name">奥斯提${alive ? '' : ' · 已倒下'}</span>
+        <span class="osty-hp">${Math.max(0, o.hp)} / ${o.maxHp}</span>
+      </div>
+      <div class="hpbar thin osty-bar"><i style="width:${pct}%"></i></div>
+    </div>
+  </div>`;
+}
+
 /** 充能球栏位：有球的显示图标（黑暗/玻璃带数值），空栏位画个圈 */
 function orbRow(combat) {
   const slots = combat.maxOrbSlots || 0;
@@ -699,6 +718,7 @@ export class App {
         <div class="battlefield">
           <div class="turn-badge" data-kw-kind="term" data-kw-id="turn">回合 ${c.turn}</div>
           <div class="enemy-row">${enemies}</div>
+          ${ostyRow(c)}
           ${orbRow(c)}
           <div class="player-zone">
             <div class="avatar" data-info-player="1">${run.avatar || '🗡️'}<div class="block-badge ${p.block ? '' : 'zero'}" data-kw-kind="term" data-kw-id="block">${p.block}</div></div>
@@ -942,9 +962,11 @@ export class App {
 
   floatAt(target, text, kind) {
     if (!target) return;
-    const el = target.isPlayer
-      ? (this.root.querySelector('.avatar') || this.root.querySelector('.player-zone'))
-      : this.root.querySelector(`[data-enemy="${target.uid}"]`);
+    const el = target.isOsty
+      ? this.root.querySelector('.osty-row')
+      : target.isPlayer
+        ? (this.root.querySelector('.avatar') || this.root.querySelector('.player-zone'))
+        : this.root.querySelector(`[data-enemy="${target.uid}"]`);
     if (!el) return;
     const rect = el.getBoundingClientRect();
     const d = document.createElement('div');
@@ -997,24 +1019,33 @@ export class App {
     rewards.push({ kind: 'cards', ids: cards });
     const potion = this.run.rollPotion();
     if (potion && this.run.potions.includes(null)) rewards.push({ kind: 'potion', id: potion });
+    // 禁忌魔典：本场战斗结束后额外给的移除机会，在点「继续」之后弹出
+    const removals = c.necro?.grimoireRemovals || 0;
+    if (removals > 0) { c.necro.grimoireRemovals = 0; rewards.push({ kind: 'remove', count: removals }); }
 
     this.combat = null;
     this.combatResolved = false;
 
+    const afterRewards = async (next) => {
+      for (let i = 0; i < removals; i++) await this.promptRemoveCard();
+      this.save();
+      next();
+    };
+
     if (isBoss) {
       this.run.bossKilled++;
       this.run.bossQueue.shift();
-      await this.showRewards(rewards, () => {
+      await this.showRewards(rewards, () => afterRewards(() => {
         if (this.run.bossQueue.length) {
           this.run.heal(Math.floor(this.run.maxHp * 0.25));
           this.startCombat('boss', null);
         } else {
           this.showGameOver(true);
         }
-      });
+      }));
       return;
     }
-    this.showRewards(rewards, () => this.showMap());
+    this.showRewards(rewards, () => afterRewards(() => this.showMap()));
   }
 
   /** 领取一项战利品，返回用于提示的名字；领不了（药水栏满）返回 null。卡牌不在这里处理 */
@@ -1030,6 +1061,7 @@ export class App {
       if (r.kind === 'gold') return `<div class="choice" data-reward="${i}"><div class="t">◉ ${r.amount} 金币</div><div class="d">点击领取</div></div>`;
       if (r.kind === 'relic') return `<div class="choice" data-reward="${i}"><div class="t">${RELICS[r.id].icon} ${RELICS[r.id].name}</div><div class="d">${RELICS[r.id].desc}</div></div>`;
       if (r.kind === 'potion') return `<div class="choice" data-reward="${i}"><div class="t">${POTIONS[r.id].icon} ${POTIONS[r.id].name}</div><div class="d">${POTIONS[r.id].desc}</div></div>`;
+      if (r.kind === 'remove') return `<div class="choice sold"><div class="t">✂️ 移除一张牌</div><div class="d">禁忌魔典：点「继续」后选择要移除的牌</div></div>`;
       return '';
     }).join('');
 
@@ -1083,7 +1115,7 @@ export class App {
         // 兜底：卡牌以外还没领的一律收下，避免「点了继续就丢奖励」
         const got = [];
         rewards.forEach((r, i) => {
-          if (r.kind === 'cards' || taken.has(i)) return;
+          if (r.kind === 'cards' || r.kind === 'remove' || taken.has(i)) return;
           const name = this.grantReward(r);
           if (name) { taken.add(i); got.push(name); }
         });
@@ -1101,7 +1133,7 @@ export class App {
   updateRewardTip(rewards, taken, cardChoices, cardPicked = false) {
     const el = $('#reward-tip');
     if (!el) return;
-    const left = rewards.filter((r, i) => r.kind !== 'cards' && !taken.has(i));
+    const left = rewards.filter((r, i) => r.kind !== 'cards' && r.kind !== 'remove' && !taken.has(i));
     if (cardPicked && !left.length) { el.textContent = '奖励已全部收下'; return; }
     const names = left.map(r => r.kind === 'gold' ? `${r.amount} 金币` : r.kind === 'relic' ? RELICS[r.id].name : POTIONS[r.id].name);
     el.textContent = names.length

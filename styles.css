@@ -262,9 +262,24 @@ html, body {
 .player-info { flex: 1; min-width: 0; }
 .player-pows { display: flex; flex-wrap: wrap; gap: 3px; margin-top: 3px; max-height: 34px; overflow: hidden; }
 
+/* 奥斯提（亡灵契约师召唤物） */
+.osty-row {
+  display: flex; align-items: center; gap: 8px; margin: 2px 6px 0;
+  padding: 6px 10px; border-radius: 12px; flex: 0 0 auto;
+  background: linear-gradient(180deg, rgba(122,90,168,.22), rgba(30,22,44,.62));
+  border: 1px solid rgba(154,120,208,.42); box-shadow: inset 0 0 14px rgba(122,90,168,.18);
+}
+.osty-row.dead { opacity: .48; filter: grayscale(.7); }
+.osty-icon { font-size: 20px; width: 26px; text-align: center; }
+.osty-body { flex: 1; min-width: 0; }
+.osty-top { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 3px; }
+.osty-name { font-size: 11px; font-weight: 700; color: #d9c8f5; letter-spacing: .04em; }
+.osty-hp { font-size: 11px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.osty-bar { height: 5px; }
+.osty-bar i { background: linear-gradient(90deg, #8f6fd0, #b79bef); }
+
 /* 充能球（故障机器人） */
-.orb-row { display: flex; gap: 8px; justify-content: center; padding: 2px 0; flex: 0 0 auto; }
-.orb {
+.orb-row { display: flex; gap: 8px; justify-content: center; padding: 2px 0; flex: 0 0 auto; }.orb {
   width: 34px; height: 34px; border-radius: 50%; position: relative;
   display: grid; place-items: center; font-size: 15px;
   background: radial-gradient(circle at 35% 28%, rgba(255,255,255,.26), rgba(6,10,14,.7));
@@ -689,7 +704,7 @@ html, body {
 .kwl:active { background: rgba(255, 208, 138, .2); }
 
 /* 界面上能点开说明的元素，统一给个手型 + 按下反馈 */
-.pw, .energy, .block-badge, .hud-chip, .hud-hp, .turn-badge, .relic, .potion, .player-info, .avatar, .orb { cursor: pointer; }
+.pw, .energy, .block-badge, .hud-chip, .hud-hp, .turn-badge, .relic, .potion, .player-info, .avatar, .orb, .osty-row { cursor: pointer; }
 .pw:active { transform: scale(.94); }
 .hud-hp:active, .hud-chip:active { opacity: .75; }
 .energy:active { transform: scale(.96); }

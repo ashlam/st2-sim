@@ -549,12 +549,16 @@ delete CARDS.THRASH_UNUSED;
 /* ---------------- 其他角色卡池合并 ---------------- */
 import { SILENT_CARDS, SHIV } from './cards-silent.js';
 import { DEFECT_CARDS, FUEL, VOID } from './cards-defect.js';
+import { NECRO_CARDS, SOUL, SWEEPING_GAZE } from './cards-necro.js';
 
 for (const [id, def] of Object.entries(SILENT_CARDS)) CARDS[id] = def;
 CARDS.SHIV = SHIV;
 for (const [id, def] of Object.entries(DEFECT_CARDS)) CARDS[id] = def;
 CARDS.FUEL = FUEL;
 CARDS.VOID = VOID;
+for (const [id, def] of Object.entries(NECRO_CARDS)) CARDS[id] = def;
+CARDS.SOUL = SOUL;
+CARDS.SWEEPING_GAZE = SWEEPING_GAZE;
 
 // 没标 char 的都是铁甲战士的牌（含状态/诅咒；这两类不进奖励池，标 NEUTRAL 便于过滤）
 for (const def of Object.values(CARDS)) {
@@ -577,7 +581,11 @@ export function makeCard(id, upgraded = false) {
     get rarity() { return def.rarity; },
     get target() { return def.target; },
     get unplayable() { return !!def.unplayable; },
-    get ethereal() { return !!def.ethereal && !(upgraded && def.noEtherealOnUpgrade); },
+    // 虚无/保留可以在战斗中被临时添加（雕琢打击 / 响指 / 虚空之唤 / 大帽子）
+    get ethereal() { return this._ethereal ?? (!!def.ethereal && !(upgraded && def.noEtherealOnUpgrade)); },
+    set ethereal(v) { this._ethereal = !!v; },
+    get retain() { return this._retain ?? (!!def.retain || !!(upgraded && def.retainOnUpgrade)); },
+    set retain(v) { this._retain = !!v; },
     get exhaustOnPlay() { return !!def.exhaustOnPlay && !(upgraded && def.noExhaustOnUpgrade); },
     get innate() { return !!(def.innate || (upgraded && def.innateOnUpgrade)); },
     get tags() { return def.tags || []; },

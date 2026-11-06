@@ -130,14 +130,50 @@ export const RELICS = {
     name: '永恒羽毛', icon: '🍃', rarity: 'uncommon',
     desc: '牌组中每有5张牌，进入休息处时回复3点生命。',
   },
+
+  /* ---------- 亡灵契约师 ---------- */
+  BOUND_PHYLACTERY: {
+    name: '缚魂命匣', icon: '⚱️', rarity: 'starter',
+    desc: '战斗开始时召唤1。你的第2回合起，每回合开始时再召唤1。',
+    onCombatStart: async (C) => { if (C.necro) await C.necro.summon(1); },
+    onTurnStart: async (C, turn) => { if (C.necro && turn > 1) await C.necro.summon(1); },
+  },
+  BONE_FLUTE: {
+    name: '骨笛', icon: '🦴', rarity: 'common',
+    desc: '每当奥斯提攻击时，获得2点格挡。',
+  },
+  FUNERARY_MASK: {
+    name: '葬礼面具', icon: '🎭', rarity: 'uncommon',
+    desc: '战斗开始时，将3张灵魂洗入你的抽牌堆。',
+  },
+  BOOK_REPAIR_KNIFE: {
+    name: '修书小刀', icon: '🔪', rarity: 'uncommon',
+    desc: '每当有一名不是爪牙的敌人死于灾厄时，回复3点生命。',
+  },
+  BIG_HAT: {
+    name: '大帽子', icon: '🎩', rarity: 'rare',
+    desc: '战斗开始时，将2张随机虚无牌加入你的手牌。',
+  },
+  BOOKMARK: {
+    name: '书签', icon: '🔖', rarity: 'rare',
+    desc: '每回合结束时，随机一张被保留的牌在被打出前的耗能减少1。',
+  },
+  IVORY_TILE: {
+    name: '象牙麻将牌', icon: '🀄', rarity: 'rare',
+    desc: '每当你打出一张耗能大于等于3的牌时，获得1点能量。',
+  },
+  UNDYING_SIGIL: {
+    name: '不死符文', icon: '🕯️', rarity: 'shop',
+    desc: '当敌人的灾厄层数大于等于其生命值时，它造成的伤害降低50%。',
+  },
 };
 
 export const RELIC_POOLS = {
-  common: ['VAJRA', 'BAG_OF_MARBLES', 'ANCHOR', 'BLOOD_VIAL', 'LANTERN', 'ODDLY_SMOOTH_STONE', 'BAG_OF_PREPARATION', 'HAPPY_FLOWER'],
-  uncommon: ['AKABEKO', 'BRONZE_SCALES', 'MEAT_ON_THE_BONE', 'ORICHALCUM', 'PEN_NIB', 'KUNAI', 'SHURIKEN', 'ART_OF_WAR', 'GIRYA', 'ETERNAL_FEATHER'],
-  rare: ['ICE_CREAM', 'JUZU_BRACELET'],
+  common: ['VAJRA', 'BAG_OF_MARBLES', 'ANCHOR', 'BLOOD_VIAL', 'LANTERN', 'ODDLY_SMOOTH_STONE', 'BAG_OF_PREPARATION', 'HAPPY_FLOWER', 'BONE_FLUTE'],
+  uncommon: ['AKABEKO', 'BRONZE_SCALES', 'MEAT_ON_THE_BONE', 'ORICHALCUM', 'PEN_NIB', 'KUNAI', 'SHURIKEN', 'ART_OF_WAR', 'GIRYA', 'ETERNAL_FEATHER', 'FUNERARY_MASK', 'BOOK_REPAIR_KNIFE'],
+  rare: ['ICE_CREAM', 'JUZU_BRACELET', 'BIG_HAT', 'BOOKMARK', 'IVORY_TILE'],
   boss: ['SNECKO_EYE', 'RUNIC_PYRAMID', 'SOZU', 'PHILOSOPHERS_STONE'],
-  shop: ['AKABEKO', 'BRONZE_SCALES', 'ORICHALCUM', 'PEN_NIB', 'KUNAI', 'SHURIKEN', 'ICE_CREAM'],
+  shop: ['AKABEKO', 'BRONZE_SCALES', 'ORICHALCUM', 'PEN_NIB', 'KUNAI', 'SHURIKEN', 'ICE_CREAM', 'UNDYING_SIGIL'],
 };
 
 /* ================= 药水 ================= */
@@ -194,10 +230,24 @@ export const POTIONS = {
     name: '灰水', icon: '🍶', rarity: 'uncommon', target: 'self', desc: '消耗你手牌中的任意张牌。',
     special: 'ashwater',
   },
+
+  /* ---------- 亡灵契约师 ---------- */
+  POTION_OF_DOOM: {
+    name: '灾厄药水', icon: '☠️', rarity: 'common', target: 'enemy', desc: '给予33层灾厄。',
+    use: async (C) => { if (C.necro) await C.necro.addDoom(33, C.target); },
+  },
+  POT_OF_GHOULS: {
+    name: '尸鬼瓮', icon: '🏺', rarity: 'rare', target: 'self', desc: '将2张灵魂加入你的手牌。',
+    use: async (C) => { if (C.necro) await C.necro.addSoul(2, 'hand'); },
+  },
+  BONE_BREW: {
+    name: '骨头酿', icon: '🧴', rarity: 'uncommon', target: 'self', desc: '召唤15。',
+    use: async (C) => { if (C.necro) await C.necro.summon(15); },
+  },
 };
 
 export const POTION_POOL = {
-  common: ['HEAL_POTION', 'STRENGTH_POTION', 'DEXTERITY_POTION', 'BLOCK_POTION', 'ENERGY_POTION', 'FIRE_POTION', 'SWIFT_POTION', 'WEAK_POTION', 'VULNERABLE_POTION'],
-  uncommon: ['EXPLOSIVE_POTION', 'BLOOD_POTION', 'REGEN_POTION', 'ASHWATER'],
-  rare: ['BLOOD_POTION'],
+  common: ['HEAL_POTION', 'STRENGTH_POTION', 'DEXTERITY_POTION', 'BLOCK_POTION', 'ENERGY_POTION', 'FIRE_POTION', 'SWIFT_POTION', 'WEAK_POTION', 'VULNERABLE_POTION', 'POTION_OF_DOOM'],
+  uncommon: ['EXPLOSIVE_POTION', 'BLOOD_POTION', 'REGEN_POTION', 'ASHWATER', 'BONE_BREW'],
+  rare: ['BLOOD_POTION', 'POT_OF_GHOULS'],
 };

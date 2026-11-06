@@ -88,9 +88,14 @@ export const CHARACTERS = [
     gold: 99,
     relic: 'BOUND_PHYLACTERY',
     relicName: '缚魂命匣',
-    deck: [],
+    // Necrobinder.cs：4×StrikeNecrobinder + 4×DefendNecrobinder + Bodyguard + Unleash
+    deck: [
+      'STRIKE_NECROBINDER', 'STRIKE_NECROBINDER', 'STRIKE_NECROBINDER', 'STRIKE_NECROBINDER',
+      'DEFEND_NECROBINDER', 'DEFEND_NECROBINDER', 'DEFEND_NECROBINDER', 'DEFEND_NECROBINDER',
+      'BODYGUARD', 'UNLEASH',
+    ],
     desc: '一位出生在尖塔的巫妖，正在寻求复仇。\n战斗中会召唤她可靠的左手奥斯提。',
-    playable: false,
+    playable: true,
     accent: '#7a5aa8',
   },
 ];

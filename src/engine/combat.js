@@ -3,12 +3,13 @@
  * 玩家回合开始（护盾清空/能量/抽牌/回合开始触发）→ 出牌 → 回合结束（弃手牌/回合结束触发）
  * → 敌人依次行动 → 敌人回合结束（中毒/覆甲/减益倒计时）→ 回到玩家回合
  */
-import { makeCard, CARDS } from '../data/cards.js';
+import { CARDS, makeCard as newCard } from '../data/cards.js';
 import { ENEMIES } from '../data/enemies.js';
 import { RELICS } from '../data/items.js';
 import { POWERS } from '../data/powers.js';
 import { ORBS, ORB_KINDS, makeOrb, orbVal } from '../data/orbs.js';
 import { Rng } from './rng.js';
+import { NecroSystem } from './necro.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -55,7 +56,7 @@ export class Combat {
     this.orbsChanneled = {};
 
     this.drawPile = this.rng.shuffle(run.deck.map((c) => {
-      const card = makeCard(c.id, c.upgraded);
+      const card = newCard(c.id, c.upgraded);
       card.deckUid = c.uid;      // 让「遗传算法」这类牌能把成长写回牌组条目
       card.persist = c;
       return card;
@@ -74,6 +75,9 @@ export class Combat {
     this.finished = false;
     this.won = false;
     this.openingDraw = 5 + (ascBane ? 0 : 0);
+
+    // 亡灵契约师的专属子系统：奥斯提 / 灾厄 / 灵魂（其它角色为 null，完全不参与结算）
+    this.necro = run.charId === 'NECROBINDER' ? new NecroSystem(this) : null;
 
     this.buildEnemies();
   }
@@ -128,6 +132,20 @@ export class Combat {
   /* ---------------- 工具 ---------------- */
   alive() { return this.enemies.filter(e => e.alive); }
   aliveEnemies() { return this.enemies.filter(e => e.alive); }
+
+  /** 供亡灵契约师的卡牌/子系统使用 */
+  makeCard(id, upgraded = false) { return newCard(id, upgraded); }
+  randomCardIdAny() {
+    const ids = Object.values(CARDS)
+      .filter(d => d && !['basic', 'ancient', 'token', 'status', 'curse', 'quest'].includes(d.rarity))
+      .filter(d => d.char === 'NECROBINDER' || d.char === 'NEUTRAL')
+      .filter(d => d.type !== 'status' && d.type !== 'curse')
+      .map(d => d.id);
+    return ids.length ? this.rng.pick(ids) : null;
+  }
+  ostyAlive() { return !!this.necro?.ostyAlive; }
+  ostyMissing() { return !this.ostyAlive(); }
+  async ostyAttack(base, opts = {}) { return this.attack(base, { ...opts, osty: true }); }
 
   get target() {
     if (this._target && this._target.alive) return this._target;
@@ -438,7 +456,8 @@ export class Combat {
       this.player.powers.shadowStep = 1;
     }
 
-    // 回合开始触发
+    // 回合开始触发（亡灵契约师：倒计时 / 精神过载 / 下回合召唤 / 哨卫模式 / 首回合遗物）
+    if (this.necro) await this.necro.onTurnStart(this.turn);
     if (this.player.powers.noxiousFumes) await this.addPowerAll('poison', this.player.powers.noxiousFumes);
     if (this.player.powers.infiniteBlades) await this.addShiv(this.player.powers.infiniteBlades, this.player.powers.infiniteBlades > 1);
     if (this.player.powers.wraithForm) {
@@ -475,7 +494,8 @@ export class Combat {
     }
 
     // 能量（遗物提供的能量统一走 onTurnStart）
-    this.maxEnergy = this.run.energyPerTurn || 3;
+    const baseEnergy = this.run.energyPerTurn || 3;
+    this.maxEnergy = this.necro ? this.necro.modifyMaxEnergy(baseEnergy) : baseEnergy;
     this.energy = (this.player._carryEnergy || 0) + this.maxEnergy + (this.player.powers.pyre || 0);
     this.player._carryEnergy = 0;
 
@@ -528,8 +548,9 @@ export class Combat {
     }
 
     // 抽牌（准备背包只在首回合生效，异蛇之眼每回合生效）
-    const drawCount = 5 + this.extraDrawPerTurn + (first ? this.firstTurnDraw : 0)
+    let drawCount = 5 + this.extraDrawPerTurn + (first ? this.firstTurnDraw : 0)
       + (this.player.powers.drawNextTurn || 0) + (this.player.powers.machineLearning || 0);
+    if (this.necro) drawCount = this.necro.beforeHandDraw(drawCount);  // 领域：每回合多抽 1
     delete this.player.powers.drawNextTurn;
     await this.draw(drawCount, { silent: true });
     if (this.player.powers.toolsOfTheTrade) { await this.draw(1); await this.discardCards(1); }
@@ -557,6 +578,8 @@ export class Combat {
       if (this.confusion) card.confusedCost = this.rng.int(4);
       this.hand.push(card);
       out.push(card);
+      // 亡灵契约师：书页风暴（抽到虚无牌多抽）/ 死亡行军的「回合内额外抽牌」计数
+      if (this.necro) budget += this.necro.cardDrawn(card, opts) || 0;
       // 虚空：抽到时失去 1 点能量
       if (card.id === 'VOID') {
         this.energy = Math.max(0, this.energy - 1);
@@ -677,28 +700,39 @@ export class Combat {
   /* ---------------- 伤害 ---------------- */
   calcPlayerAttack(base, target, opts = {}) {
     let d = base;
-    if (!opts.noStrength) d += this.str(this.player);
-    if (this.player.vigor > 0 && !opts.noStrength) { d += this.player.vigor; this.player.vigor = 0; }
-    if (this.player.powers.shrink) d = Math.floor(d * 0.7);
-    if (this.player.powers.weak) d = Math.floor(d * 0.75);
-    if (this.player.penNib >= 10) { d *= 2; }
-    if (target) {
-      if (target.powers.vulnerable) {
-        const bonus = 1.5 + ((this.player.powers.cruelty || 0) / 100);
-        d = Math.floor(d * bonus);
+    if (opts.osty) {
+      // FromOsty：攻击者是奥斯提而非玩家 → 不吃玩家力量/虚弱/钢笔尖/暗影步/跟踪，
+      // 但仍吃目标身上的易伤与无实体（对照 AttackCommand.cs 的 dealer 修正）
+      if (target) {
+        if (target.powers.vulnerable) d = Math.floor(d * 1.5);
+        if (target.powers.intangible) d = 1;
       }
-      if (target.powers.intangible) d = 1;
-      // 跟踪：对虚弱敌人伤害翻倍
-      if (this.player.powers.tracking && target.powers.weak) d *= 2;
+    } else {
+      if (!opts.noStrength) d += this.str(this.player);
+      if (this.player.vigor > 0 && !opts.noStrength) { d += this.player.vigor; this.player.vigor = 0; }
+      if (this.player.powers.shrink) d = Math.floor(d * 0.7);
+      if (this.player.powers.weak) d = Math.floor(d * (this.player.powers.debilitate ? 0.5 : 0.75));
+      if (this.player.penNib >= 10) { d *= 2; }
+      if (target) {
+        if (target.powers.vulnerable) {
+          const bonus = 1.5 + ((this.player.powers.cruelty || 0) / 100);
+          d = Math.floor(d * bonus);
+        }
+        if (target.powers.intangible) d = 1;
+        // 跟踪：对虚弱敌人伤害翻倍
+        if (this.player.powers.tracking && target.powers.weak) d *= 2;
+      }
+      // 暗影步：本回合攻击翻倍
+      if (this.player.powers.shadowStep) d *= 2;
     }
-    // 暗影步：本回合攻击翻倍
-    if (this.player.powers.shadowStep) d *= 2;
-    return Math.max(0, d);
+    if (this.necro) d = this.necro.modifyDamage(d, target, opts);
+    return Math.max(0, Math.floor(d));
   }
 
   async attack(base, opts = {}) {
     const times = opts.times || 1;
     let killed = false;
+    const totals = [];
     for (let t = 0; t < times; t++) {
       if (this.finished) break;
       let targets;
@@ -712,12 +746,14 @@ export class Combat {
       }
       for (const tg of targets) {
         const dmg = this.calcPlayerAttack(base, tg, opts);
-        await this.dealDamage(tg, dmg, { isAttack: true, source: 'player' });
+        totals.push({ target: tg, amount: dmg });
+        await this.dealDamage(tg, dmg, { isAttack: true, source: 'player', osty: !!opts.osty });
         if (!tg.alive) killed = true;
       }
       await this.wait(60);
       if (!this.alive().length) break;
     }
+    if (this.necro) await this.necro.afterAttack(opts, totals);
     // 钢笔尖
     if (this.run.relics.includes('PEN_NIB')) {
       this.player.penNib = (this.player.penNib || 0) + 1;
@@ -741,6 +777,15 @@ export class Combat {
       target.block -= absorbed;
       remain -= absorbed;
       if (absorbed > 0) this.float(target, '-' + absorbed, 'block');
+    }
+    // 为你而死（DieForYouPower）：玩家格挡先吸收，未格挡的攻击伤害转给存活的奥斯提，
+    // 奥斯提被打死后溢出部分回流玩家；非攻击伤害（中毒/遗物/能力）不转嫁。
+    if (remain > 0 && target.isPlayer && opts.isAttack && opts.source && !opts.source.isPlayer && this.necro?.ostyAlive) {
+      const taken = await this.necro.damageOsty(remain);
+      if (taken > 0) {
+        remain -= taken;
+        this.logEvent('damage', `奥斯提 替你承受了 ${taken} 点伤害`);
+      }
     }
     if (remain > 0) {
       target.hp -= remain;
@@ -779,7 +824,11 @@ export class Combat {
           if (atk && atk.alive) await this.dealDamage(atk, this.player.powers.flameBarrier, { isAttack: false });
         }
       } else {
-        if (target.powers.thorns) await this.dealDamage(this.player, target.powers.thorns, { isAttack: false });
+        if (target.powers.thorns) {
+          // 奥斯提发起的攻击，荆棘反伤打的是奥斯提（dealer），不是玩家
+          if (opts.osty && this.necro?.ostyAlive) await this.necro.damageOsty(target.powers.thorns);
+          else await this.dealDamage(this.player, target.powers.thorns, { isAttack: false });
+        }
       }
       if (target.powers.curlUp) {
         const amt = target.powers.curlUp;
@@ -820,6 +869,7 @@ export class Combat {
         this.msg(`${ally.name} 随之消散`);
       }
     }
+    if (this.necro) this.necro.onDeath(e);
     this.emit();
     await this.wait(200);
     if (!this.alive().length) {
@@ -886,6 +936,7 @@ export class Combat {
     if (id === 'vulnerable' && !t.isPlayer && this.player.powers.vicious) {
       await this.draw(this.player.powers.vicious);
     }
+    if (this.necro) await this.necro.afterPowerChanged(id, amount, t);
     await this.wait(50);
   }
 
@@ -924,6 +975,7 @@ export class Combat {
     if (this.player.powers.tangled && card.type === 'attack') c += 1;
     const def = CARDS[card.id];
     if (def.costMod) c += def.costMod(card, this);
+    if (this.necro) c = this.necro.modifyCost(card, c);
     return Math.max(0, c);
   }
 
@@ -983,8 +1035,11 @@ export class Combat {
     this.emit();
     await this.wait(60);
 
-    // 连环拳 / 下次攻击免费 / 爆发 / 回响形态 / 信号增强
-    let replay = 1;
+    // 亡灵契约师：打出前的能力（死亡之舞 / 灰烬之灵 / 刺破帷幕 / 湮灭快照）
+    if (this.necro) await this.necro.beforeCardPlayed(card, isX ? xValue : cost);
+
+    // 连环拳 / 下次攻击免费 / 爆发 / 回响形态 / 信号增强 / 重构（重放）
+    let replay = 1 + (card.replayBonus || 0);
     if (card.type === 'attack') {
       this.attacksPlayedThisTurn++;
       this.player.attackCounter++;
@@ -1023,6 +1078,9 @@ export class Combat {
       if (this.finished) break;
       await card.def.play(this, card);
     }
+
+    // 亡灵契约师：虚无计数 / 灵魂 / 湮灭 / 象牙麻将牌
+    if (this.necro) await this.necro.afterCardPlayed(card, isX ? xValue : cost);
 
     // 雷暴 / 子程序：每打出一张能力牌触发
     if (card.type === 'power' && !this.finished) {
@@ -1093,6 +1151,8 @@ export class Combat {
       this.player.powers.freePower--;
       if (this.player.powers.freePower <= 0) delete this.player.powers.freePower;
     }
+    // 亡灵契约师：得力助手在「打出耗能≥2的牌」之后从弃牌堆回手
+    if (this.necro) await this.necro.afterCardPlayedLate(card, isX ? xValue : cost);
     card.freeThisTurn = false;
     this.busy = false;
     this.emit();
@@ -1197,7 +1257,7 @@ export class Combat {
   async addCard(id, pile = 'discard', upgraded = false, times = 1) {
     const out = [];
     for (let i = 0; i < times; i++) {
-      const c = makeCard(id, upgraded);
+      const c = newCard(id, upgraded);
       c.freeThisTurn = true;
       if (pile === 'hand') this.addCardToHand(c);
       else if (pile === 'draw') this.drawPile.push(c);
@@ -1231,7 +1291,7 @@ export class Combat {
       .filter(d => !d.char || d.char === 'NEUTRAL' || d.char === this.run.charId)
       .map(d => d.id);
     if (!ids.length) return null;
-    return makeCard(this.rng.pick(ids));
+    return newCard(this.rng.pick(ids));
   }
 
   upgradeCard(card) {
@@ -1284,7 +1344,8 @@ export class Combat {
     // 战斗已经结束（例：头槌最后一击打死敌人，之后才轮到"选一张牌放回牌顶"）：
     // 这时再弹选择面板会盖在战利品界面上，流程永远等不到确认 → 直接跳过。
     if (this.finished) return [];
-    const pool = (from === 'hand' ? this.hand : from === 'discard' ? this.discardPile : this.exhaustPile).filter(filter);
+    const pool = (from === 'hand' ? this.hand : from === 'discard' ? this.discardPile
+      : from === 'draw' ? this.drawPile : this.exhaustPile).filter(filter);
     if (!pool.length) return [];
     if (count >= pool.length) return pool.slice(0, count);
     if (this.requestSelection) {
@@ -1388,6 +1449,8 @@ export class Combat {
       if (this.player.shivRetain) {
         for (const c of this.hand) if (c.id === 'SHIV' && !keep.includes(c)) keep.push(c);
       }
+      // 保留关键词（含「重构」「响指」临时加上的）
+      for (const c of this.hand) if (c.retain && !keep.includes(c)) keep.push(c);
       const gone = [];
       for (const card of [...this.hand]) {
         if (keep.includes(card)) continue;
@@ -1401,6 +1464,10 @@ export class Combat {
 
     this.player._carryEnergy = (this.player._carryEnergy || 0) + (this.run.relics.includes('ICE_CREAM') ? this.energy : 0);
     if (this.run.relics.includes('ART_OF_WAR') && this.attacksPlayedThisTurn === 0) this.player._carryEnergy += 1;
+
+    // 亡灵契约师：玩家一方回合结束（弃牌/虚无之后）清理本回合能力并结算玩家侧灾厄
+    if (this.necro) await this.necro.onPlayerTurnEnd();
+    if (this.finished) return;
 
     this.emit();
     await this.wait(150);
@@ -1445,6 +1512,8 @@ export class Combat {
       this.emit();
       await this.wait(140);
     }
+    // 亡灵契约师：敌人一方回合结束结算敌人侧灾厄、清理紧追不放 / 弱化之触
+    if (this.necro && !this.finished) await this.necro.onEnemyTurnEnd();
   }
 
   async enemyAttack(e, base, ascValue, times = 1) {
@@ -1456,8 +1525,11 @@ export class Combat {
     for (let i = 0; i < times; i++) {
       if (!e.alive || this.finished) return;
       let d = base + this.str(e);
-      if (e.powers.weak) d = Math.floor(d * 0.75);
-      if (this.player.powers.vulnerable) d = Math.floor(d * 1.5);
+      // 摧残：虚弱倍率 0.75 → 0.5，易伤 1.5 → 2
+      if (e.powers.weak) d = Math.floor(d * (e.powers.debilitate ? 0.5 : 0.75));
+      if (this.player.powers.vulnerable) d = Math.floor(d * (this.player.powers.debilitate ? 2 : 1.5));
+      // 不死符文：自身灾厄层数已达生命值（即本回合末会死）的敌人，伤害减半
+      if (this.run.relics.includes('UNDYING_SIGIL') && (e.powers.doom || 0) >= e.hp) d = Math.floor(d * 0.5);
       this._lastAttacker = e;
       e.acting = true;
       this.emit();
@@ -1519,6 +1591,7 @@ export class Combat {
 
   /* ---------------- 结束 ---------------- */
   async finish() {
+    if (this.necro) this.necro.onCombatEnd();   // 禁忌魔典：追加移除牌奖励
     for (const rid of this.run.relics) {
       const r = RELICS[rid];
       if (r?.onCombatEnd) await r.onCombatEnd(this, r);
