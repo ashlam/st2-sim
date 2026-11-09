@@ -23,7 +23,7 @@ await page.waitForTimeout(400);
 await page.screenshot({ path: 'shots/03-neow.png' });
 
 // 选第一个祝福
-await page.click('#neow-list .choice');
+await page.click('#anc-list .choice');
 await page.waitForTimeout(500);
 await page.screenshot({ path: 'shots/04-map.png' });
 

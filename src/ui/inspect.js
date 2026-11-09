@@ -186,5 +186,6 @@ export function intentLabel(intent, asc = 0) {
   return {
     defend: '获得格挡', buff: '强化自身', debuff: '施加负面',
     status: '塞状态牌', sleep: '沉睡', stun: '眩晕', none: '无',
+    escape: '逃跑', summon: '召唤', heal: '回复自身',
   }[intent.type] || '未知';
 }

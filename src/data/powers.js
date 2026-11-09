@@ -39,7 +39,47 @@ export const POWERS = {
   enrage:          { name: '激怒', type: 'buff', desc: n => `每当你打出一张技能牌，获得${n}点力量。` },
   sporeCloud:      { name: '孢子云', type: 'debuff', desc: n => `死亡时给予你${n}层易伤。` },
   malleable:       { name: '可塑', type: 'buff', desc: n => `受到攻击后获得${n}点格挡。` },
-  hex:             { name: '六芒', type: 'debuff', desc: () => '你打出的下一张牌被施加侵蚀。' },
+  hex:             { name: '恶咒', type: 'debuff', desc: () => '幽灵骑士存活时，你的所有卡牌都拥有「虚无」。' },
+
+  /* ---- 第二幕（巢穴）敌人机制 ---- */
+  imbalanced:      { name: '失衡', type: 'debuff', desc: () => '如果这个生物的攻击被完全格挡，则它会被击晕。' },
+  hardToKill:      { name: '难以杀灭', type: 'buff', desc: n => `受到的所有伤害不会超过${n}点。` },
+  tender:          { name: '柔嫩', type: 'debuff', desc: n => `本回合你每打出一张牌，就失去1点力量和1点敏捷（${n}回合）。` },
+  burrowed:        { name: '埋地', type: 'buff', desc: () => '格挡不会在其回合开始时移除。如果所有格挡被移除，则将其击晕。' },
+  slumber:         { name: '熟睡', type: 'buff', desc: n => `经过${n}回合或失去生命3次后苏醒。` },
+  reattach:        { name: '接续', type: 'buff', desc: () => '如果身体还有存活的其他部位，则以25点生命复活。' },
+  personalHive:    { name: '人体蜂房', type: 'buff', desc: n => `每当这个敌人被攻击命中时，往你的抽牌堆加入${n}张眩晕。` },
+  flutter:         { name: '振翅', type: 'buff', desc: () => '从攻击牌中受到的伤害减少50%。' },
+  escapeArtist:    { name: '逃脱大师', type: 'buff', desc: n => `在${n}回合后离开战斗。` },
+  swipe:           { name: '顺走', type: 'buff', desc: () => '击杀这名敌人时，会取回被偷走的卡牌。' },
+  illusion:        { name: '幻象', type: 'buff', desc: () => '死亡时，下回合会以完整生命值复活。' },
+  crabRage:        { name: '蟹之怒', type: 'buff', desc: () => '当有盟友死亡时，这个生物获得5点力量和99点格挡。' },
+  vitalSpark:      { name: '活力火花', type: 'buff', desc: () => '这个敌人每回合第一次受到攻击伤害时，你获得1点能量。' },
+  mindRot:         { name: '心灵腐化', type: 'debuff', desc: n => `每回合少抽${n}张牌。` },
+  sloth:           { name: '懒惰', type: 'debuff', desc: n => `你在每个回合不能打出超过${n}张牌。` },
+  wasteAway:       { name: '衰朽', type: 'debuff', desc: n => `每回合获得的能量减少${n}点。` },
+
+  /* ---- 第三幕（荣耀）敌人机制 ---- */
+  stock:           { name: '库存', type: 'buff', desc: () => '被击杀时，召唤一个全新的巨斧机器人。' },
+  galvanic:        { name: '流电', type: 'buff', desc: n => `你的能力牌被侵蚀为「流电」：打出时受到${n}点伤害。` },
+  soar:            { name: '翱翔', type: 'buff', desc: () => '在落地之前受到的伤害减少50%。' },
+  paperCuts:       { name: '纸伤难愈', type: 'buff', desc: n => `每当这个生物对你造成未被格挡的伤害时，你失去${n}点最大生命。` },
+  possessStrength: { name: '抢夺力量', type: 'buff', desc: () => '被击杀时，将偷窃的所有力量返还给玩家。' },
+  possessSpeed:    { name: '抢夺速度', type: 'buff', desc: () => '被击杀时，将偷窃的所有敏捷返还给玩家。' },
+  rampart:         { name: '盾墙', type: 'buff', desc: n => `在玩家回合开始时，高塔炮手获得${n}点格挡。` },
+  chainsOfBinding: { name: '魂缚锁链', type: 'debuff', desc: n => `每回合抽到的前${n}张牌被侵蚀为「魂缚」；每回合只能打出其中1张。` },
+  dampen:          { name: '抑制', type: 'debuff', desc: () => '魔法骑士存活时，你的所有卡牌被降级。' },
+  highVoltage:     { name: '高电压', type: 'buff', desc: n => `这个生物的回合结束时，获得${n}点力量。` },
+  witheringPresence: { name: '凋零气场', type: 'buff', desc: n => `你每打出${n}张牌，就将1张「凋零」加入手牌。` },
+  adaptable:       { name: '适者生存', type: 'buff', desc: () => '当这个怪物将要被击败时，它会复活变得更加强大。' },
+  nemesis:         { name: '天罚', type: 'buff', desc: () => '每两个回合结束时，获得1层无实体。' },
+  painfulStabs:    { name: '疼痛戳刺', type: 'buff', desc: n => `这个生物造成未被格挡的攻击伤害时，将${n}张「伤口」加入你的弃牌堆。` },
+  bound:           { name: '魂缚', type: 'debuff', desc: () => '本回合已经打出过魂缚牌，这张牌无法打出。' },
+  minion:          { name: '爪牙', type: 'buff', desc: () => '爪牙会在他们的领导者死亡时放弃战斗。' },
+
+  /* ---- 事件牌（打造时间） ---- */
+  curious:         { name: '好奇', type: 'buff', desc: n => `能力牌的耗能减少${n}点。` },
+  improvement:     { name: '改善', type: 'buff', desc: () => '在战斗结束时，随机升级一张牌。' },
 
   /* ---- 静默猎手 ---- */
   poison:          { name: '中毒', type: 'debuff', desc: n => `回合结束时失去${n}点生命（无视格挡），然后中毒减1层。` },
@@ -144,6 +184,21 @@ export const POWERS = {
   arsenal:           { name: '武器库', type: 'buff', desc: n => `每生成一张无色牌，获得${n}点力量。` },
   royalties:         { name: '王国资产', type: 'buff', desc: n => `战斗胜利时获得${n}金币。` },
   voidForm:          { name: '虚空形态', type: 'buff', desc: n => `每回合前${n}张牌免费打出（能量与星愿都为0）。` },
+  /* ---- 第一幕 · 海底（Underdocks） ---- */
+  ravenous:          { name: '饥饿', type: 'buff', desc: n => `有敌人死亡时，吃下尸体，本回合被击晕并获得${n}点力量。` },
+  suck:              { name: '吮吸', type: 'buff', desc: n => `每次造成未被格挡的伤害时，获得${n}点力量。` },
+  surprise:          { name: '意外', type: 'buff', desc: () => '这个生物有点不太对劲……' },
+  thievery:          { name: '偷窃', type: 'buff', desc: n => `攻击时偷走${n}金币。` },
+  smoggy:            { name: '烟雾弥漫', type: 'debuff', desc: () => '你每回合只能打出1张技能牌。' },
+  skittish:          { name: '胆小', type: 'buff', desc: n => `每回合第一次被命中时，获得${n}点格挡。` },
+  hardenedShell:     { name: '硬化外壳', type: 'buff', desc: n => `每回合失去的生命值不会超过${n}点。` },
+  shriek:            { name: '尖叫', type: 'buff', desc: n => `生命值第一次降到${n}或以下时，会被击晕。` },
+  vigor:             { name: '活力', type: 'buff', desc: n => `下一次攻击额外造成${n}点伤害。` },
+  steamEruption:     { name: '蒸汽喷发', type: 'buff', desc: n => `被击杀时，在下个回合结束时造成${n}点伤害。` },
+  asleep:            { name: '沉睡', type: 'buff', desc: n => `还会沉睡${n}个回合。` },
+  /* ---- 事件牌（被遗忘的旧日） ---- */
+  helloWorld:        { name: '你好世界', type: 'buff', desc: n => `回合开始时，将${n}张随机普通牌加入手牌。` },
+  rebound:           { name: '弹回', type: 'buff', desc: n => `本回合打出的下${n}张牌会回到抽牌堆顶部。` },
 };
 
 export function powerName(id) { return POWERS[id]?.name || id; }

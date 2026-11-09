@@ -539,12 +539,193 @@ export const CARDS = {
   },
   INFECTION: {
     id: 'INFECTION', name: '感染', type: 'status', rarity: 'status', cost: -1, target: 'none', unplayable: true,
-    text: '无法被打出。\n在你的回合结束时，受到1点伤害。',
+    text: '无法被打出。\n在你的回合结束时，如果这张牌在你的[gold]手牌[/gold]中，则受到{Damage}点伤害。',
+    vars: () => ({ Damage: 3 }), play: async () => {},
+  },
+  TOXIC: {
+    id: 'TOXIC', name: '剧毒', type: 'status', rarity: 'status', cost: 1, target: 'none',
+    text: '[gold]消耗[/gold]。\n在你的回合结束时，受到5点伤害。',
+    vars: () => ({}), play: async () => {}, exhaustOnPlay: true,
+  },
+  // 灵魂异鱼：可以打出但毫无作用，留在手里回合结束掉 6 点生命（不可格挡）
+  BECKON: {
+    id: 'BECKON', name: '呼唤', type: 'status', rarity: 'status', cost: 1, target: 'none',
+    text: '在你的回合结束时，如果这张牌在你的[gold]手牌[/gold]中，则失去6点生命。',
+    vars: () => ({}), play: async () => {},
+  },
+  FRANTIC_ESCAPE: {
+    id: 'FRANTIC_ESCAPE', name: '狂乱逃逸', type: 'status', rarity: 'status', cost: 1, target: 'self',
+    text: '沙坑的倒计时 +1。',
+    vars: () => ({}),
+    play: async (C) => {
+      const pit = C.enemies.find(e => e.sandpit != null && e.alive);
+      if (pit) { pit.sandpit += 1; C.msg(`沙坑的倒计时延长到 ${pit.sandpit}`); C.emit(); }
+    },
+  },
+  // 永世之镜：不可打出的状态牌，回合结束时留在手里就受伤，伤害随「渐强」逐级提高
+  WITHER: {
+    id: 'WITHER', name: '凋零', type: 'status', rarity: 'status', cost: -1, target: 'none', unplayable: true,
+    text: '无法被打出。\n在你的回合结束时，如果这张牌在你的[gold]手牌[/gold]中，你受到{Cards}点伤害。',
+    vars: (c) => ({ Cards: 3 + 3 * (c.witherLevel || 0) }),
+    play: async () => {},
+  },
+
+  /* ================= 诅咒（事件塞牌） ================= */
+  DECAY: {
+    id: 'DECAY', name: '腐朽', type: 'curse', rarity: 'curse', cost: -1, target: 'none', unplayable: true,
+    text: '无法被打出。\n在你的回合结束时，如果这张牌在你的[gold]手牌[/gold]中，你受到2点伤害。',
+    vars: () => ({}), play: async () => {},
+  },
+  BAD_LUCK: {
+    id: 'BAD_LUCK', name: '霉运', type: 'curse', rarity: 'curse', cost: -1, target: 'none', unplayable: true,
+    text: '无法被打出。[gold]永恒[/gold]。\n在你的回合结束时，如果这张牌在你的[gold]手牌[/gold]中，你失去13点生命。',
+    vars: () => ({}), play: async () => {},
+  },
+  REGRET: {
+    id: 'REGRET', name: '悔恨', type: 'curse', rarity: 'curse', cost: -1, target: 'none', unplayable: true,
+    text: '无法被打出。\n在你的回合结束时，如果这张牌在你的[gold]手牌[/gold]中，你失去等同于手牌数量的生命。',
+    vars: () => ({}), play: async () => {},
+  },
+  SHAME: {
+    id: 'SHAME', name: '羞耻', type: 'curse', rarity: 'curse', cost: -1, target: 'none', unplayable: true,
+    text: '无法被打出。\n在你的回合结束时，如果这张牌在你的[gold]手牌[/gold]中，获得1层[gold]脆弱[/gold]。',
+    vars: () => ({}), play: async () => {},
+  },
+  DOUBT: {
+    id: 'DOUBT', name: '疑虑', type: 'curse', rarity: 'curse', cost: -1, target: 'none', unplayable: true,
+    text: '无法被打出。\n在你的回合结束时，如果这张牌在你的[gold]手牌[/gold]中，获得1层[gold]虚弱[/gold]。',
+    vars: () => ({}), play: async () => {},
+  },
+  NORMALITY: {
+    id: 'NORMALITY', name: '凡庸', type: 'curse', rarity: 'curse', cost: -1, target: 'none', unplayable: true,
+    text: '无法被打出。\n只要这张牌在你的[gold]手牌[/gold]中，你每回合最多打出3张牌。',
+    vars: () => ({}), play: async () => {},
+  },
+
+  /* ================= 事件牌（巢穴 / 荣耀） ================= */
+  ULTIMATE_STRIKE: {
+    id: 'ULTIMATE_STRIKE', name: '究极打击', type: 'attack', rarity: 'event', cost: 1, target: 'enemy',
+    tags: ['strike'], text: '造成{Damage}点伤害。',
+    vars: (c) => ({ Damage: c.upgraded ? 20 : 14 }),
+    play: async (C) => { await C.attack(C.v('Damage')); },
+  },
+  ULTIMATE_DEFEND: {
+    id: 'ULTIMATE_DEFEND', name: '究极防御', type: 'skill', rarity: 'event', cost: 1, target: 'self',
+    tags: ['defend'], text: '获得{Block}点[gold]格挡[/gold]。',
+    vars: (c) => ({ Block: c.upgraded ? 15 : 11 }),
+    play: async (C) => { await C.block(C.v('Block')); },
+  },
+  EXTERMINATE: {
+    id: 'EXTERMINATE', name: '杀灭', type: 'attack', rarity: 'event', cost: 1, target: 'all',
+    text: '对所有敌人造成{Damage}点伤害4次。',
+    vars: (c) => ({ Damage: c.upgraded ? 4 : 3 }),
+    play: async (C) => { await C.attack(C.v('Damage'), { all: true, times: 4 }); },
+  },
+  SQUASH: {
+    id: 'SQUASH', name: '压扁', type: 'attack', rarity: 'event', cost: 1, target: 'enemy',
+    text: '造成{Damage}点伤害。\n给予{Vuln}层[gold]易伤[/gold]。',
+    vars: (c) => ({ Damage: c.upgraded ? 12 : 10, Vuln: c.upgraded ? 3 : 2 }),
+    play: async (C) => {
+      const t = C.target;
+      await C.attack(C.v('Damage'), { target: t });
+      if (t && t.alive) await C.addPower('vulnerable', C.v('Vuln'), t);
+    },
+  },
+  METAMORPHOSIS: {
+    id: 'METAMORPHOSIS', name: '羽化', type: 'skill', rarity: 'event', cost: 2, target: 'self',
+    exhaustOnPlay: true,
+    text: '在你的[gold]抽牌堆[/gold]中加入{Cards}张随机攻击牌。它们在本场战斗中可以被免费打出。',
+    vars: (c) => ({ Cards: c.upgraded ? 5 : 3 }),
+    play: async (C, c) => {
+      for (let i = 0; i < C.v('Cards'); i++) {
+        const card = C.randomCardOfType('attack');
+        if (!card) break;
+        card.freeCombat = true;
+        C.drawPile.push(card);
+      }
+      C.drawPile = C.rng.shuffle(C.drawPile);
+      C.msg(`羽化：抽牌堆加入了 ${C.v('Cards')} 张免费攻击牌`);
+      C.emit();
+    },
+  },
+  ENLIGHTENMENT: {
+    id: 'ENLIGHTENMENT', name: '开悟', type: 'skill', rarity: 'event', cost: 0, target: 'self',
+    exhaustOnPlay: true,
+    textFn: (c) => (c && c.upgraded
+      ? '在这[gold]场战斗[/gold]，你当前[gold]手牌[/gold]中所有牌的耗能降低至1。'
+      : '在这[gold]个回合[/gold]，你当前[gold]手牌[/gold]中所有牌的耗能降低至1。'),
+    vars: () => ({}),
+    play: async (C, c) => {
+      for (const card of C.hand) {
+        if (C.costOf(card) > 1 || (typeof card.cost === 'number' && card.cost > 1)) {
+          if (c.upgraded) card.costOverrideCombat = 1;
+          else card.costOverrideTurn = 1;
+        }
+      }
+      C.msg(c.upgraded ? '开悟：本场战斗手牌耗能降为 1' : '开悟：本回合手牌耗能降为 1');
+      C.emit();
+    },
+  },
+  LANTERN_KEY: {
+    id: 'LANTERN_KEY', name: '灯火钥匙', type: 'quest', rarity: 'quest', cost: -1, target: 'none', unplayable: true,
+    text: '在下一阶段解锁一个特殊事件。',
     vars: () => ({}), play: async () => {},
   },
 };
 
 delete CARDS.THRASH_UNUSED;
+
+/* ---------------- 打造时间：疯狂科学（按「类型 + 词条」生成变体） ----------------
+ * 原作是一张可配置卡牌；这里把配置编进卡牌 id，存档时才能保住词条。
+ * 数值对照 MadScience.cs：攻击 12 伤害（暴力 3 次）/ 技能 8 格挡 / 耗能 1。            */
+const MAD_SCIENCE_VARIANTS = {
+  ATTACK_SAPPING: { type: 'attack', text: '造成{Damage}点伤害。\n给予2层[gold]虚弱[/gold]。\n给予2层[gold]易伤[/gold]。' },
+  ATTACK_VIOLENCE: { type: 'attack', text: '造成{Damage}点伤害3次。' },
+  ATTACK_CHOKING: { type: 'attack', text: '造成{Damage}点伤害。\n本回合，你每打出一张牌，该敌人失去6点生命。' },
+  SKILL_ENERGIZED: { type: 'skill', text: '获得{Block}点[gold]格挡[/gold]。\n获得2点能量。' },
+  SKILL_WISDOM: { type: 'skill', text: '获得{Block}点[gold]格挡[/gold]。\n抽3张牌。' },
+  SKILL_CHAOS: { type: 'skill', text: '获得{Block}点[gold]格挡[/gold]。\n将一张随机牌加入你的[gold]手牌[/gold]，这张牌在本回合耗能变为0。' },
+  POWER_EXPERTISE: { type: 'power', text: '获得2点[gold]力量[/gold]。\n获得2点[gold]敏捷[/gold]。' },
+  POWER_CURIOUS: { type: 'power', text: '能力牌的耗能减少1。' },
+  POWER_IMPROVEMENT: { type: 'power', text: '在战斗结束时，随机[gold]升级[/gold]一张牌。' },
+};
+
+for (const [key, v] of Object.entries(MAD_SCIENCE_VARIANTS)) {
+  CARDS['MAD_SCIENCE_' + key] = {
+    id: 'MAD_SCIENCE_' + key, name: '疯狂科学', type: v.type, rarity: 'event', cost: 1,
+    target: v.type === 'attack' ? 'enemy' : 'self',
+    text: v.text,
+    vars: () => ({ Damage: 12, Block: 8 }),
+    play: async (C) => {
+      const t = C.target;
+      if (v.type === 'attack') {
+        await C.attack(12, { times: key === 'ATTACK_VIOLENCE' ? 3 : 1, target: t });
+        if (key === 'ATTACK_SAPPING' && t && t.alive) {
+          await C.addPower('weak', 2, t);
+          await C.addPower('vulnerable', 2, t);
+        }
+        if (key === 'ATTACK_CHOKING' && t && t.alive) await C.addPower('strangle', 6, t);
+        return;
+      }
+      if (v.type === 'skill') {
+        await C.block(8);
+        if (key === 'SKILL_ENERGIZED') C.gainEnergy(2);
+        if (key === 'SKILL_WISDOM') await C.draw(3);
+        if (key === 'SKILL_CHAOS') {
+          const card = C.randomCardOfType(C.rng.pick(['attack', 'skill', 'power']));
+          if (card) { card.freeThisTurn = true; C.addCardToHand(card); }
+        }
+        return;
+      }
+      if (key === 'POWER_EXPERTISE') {
+        await C.addPower('strength', 2);
+        await C.addPower('dexterity', 2);
+      }
+      if (key === 'POWER_CURIOUS') await C.addPower('curious', 1);
+      if (key === 'POWER_IMPROVEMENT') await C.addPower('improvement', 1);
+    },
+  };
+}
 
 /* ---------------- 其他角色卡池合并 ---------------- */
 import { SILENT_CARDS, SHIV } from './cards-silent.js';
@@ -562,6 +743,10 @@ CARDS.SOUL = SOUL;
 CARDS.SWEEPING_GAZE = SWEEPING_GAZE;
 for (const [id, def] of Object.entries(REGENT_CARDS)) CARDS[id] = def;
 CARDS.SOVEREIGN_BLADE = SOVEREIGN_BLADE;
+import { EVENT_CARDS } from './cards-event.js';
+for (const [id, def] of Object.entries(EVENT_CARDS)) CARDS[id] = def;
+import { ANCIENT_CARDS } from './cards-ancient.js';
+for (const [id, def] of Object.entries(ANCIENT_CARDS)) CARDS[id] = def;
 
 // 没标 char 的都是铁甲战士的牌（含状态/诅咒；这两类不进奖励池，标 NEUTRAL 便于过滤）
 for (const def of Object.values(CARDS)) {
@@ -589,9 +774,8 @@ export function makeCard(id, upgraded = false) {
     set ethereal(v) { this._ethereal = !!v; },
     get retain() { return this._retain ?? (!!def.retain || !!(upgraded && def.retainOnUpgrade)); },
     set retain(v) { this._retain = !!v; },
-    get exhaustOnPlay() { return !!def.exhaustOnPlay && !(upgraded && def.noExhaustOnUpgrade); },
+    get exhaustOnPlay() { return this._exhaust ?? (!!def.exhaustOnPlay && !(upgraded && def.noExhaustOnUpgrade) && !this._noExhaust); },
     get innate() { return !!(def.innate || (upgraded && def.innateOnUpgrade)); },
-    get retain() { return !!def.retain; },
     get tags() { return def.tags || []; },
     /** 星愿费用（储君第二资源）。不随 freeThisTurn 归零，免费由 voidForm 在 starCostOf 里处理 */
     get stars() {

@@ -28,11 +28,13 @@ await page.waitForTimeout(220);
 async function clearOverlays() {
   for (let i = 0; i < 8; i++) {
     const done = await page.evaluate(() => {
+      const cfm = document.querySelector('.cfm-pop');
+      if (cfm) { (cfm.querySelector('.cfm-ok') || cfm.querySelector('.cfm-cancel'))?.click(); return 'confirm'; }
       const ov = document.querySelector('.overlay-layer:not(.hidden)');
       if (!ov) return 'none';
       const btn = ov.querySelector('#skip-reward, #take-treasure, #leave-shop, #sel-confirm, #close-deck, #close-pile, #rm-cancel, .btn');
       if (btn) { btn.click(); return 'btn'; }
-      const choice = ov.querySelector('#neow-list .choice, .choice');
+      const choice = ov.querySelector('#anc-list .choice, .choice');
       if (choice) { choice.click(); return 'choice'; }
       return 'stuck';
     });
@@ -89,6 +91,8 @@ const rmOpen = await page.evaluate(() => (document.querySelector('.overlay-layer
 ok(rmOpen, '点继续后弹出移除牌面板');
 if (rmOpen) {
   await page.evaluate(() => document.querySelector('#rm-grid [data-uid]').click());
+  await page.waitForTimeout(200);
+  await page.evaluate(() => document.querySelector('.cfm-pop .cfm-ok')?.click());
   await page.waitForTimeout(500);
 }
 const deckAfter = await page.evaluate(() => window.app.run.deck.length);

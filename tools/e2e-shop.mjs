@@ -114,6 +114,9 @@ await page.evaluate(() => document.querySelector('#shop-buy').click());
 await page.waitForTimeout(350);
 console.log('选牌面板出现:', await page.evaluate(() => !!document.querySelector('#sel-grid')));
 await page.evaluate(() => document.querySelector('#sel-grid [data-uid]').click());
+await page.waitForTimeout(200);
+console.log('删牌确认层:', await page.evaluate(() => !!document.querySelector('.cfm-pop')));
+await page.evaluate(() => document.querySelector('.cfm-pop .cfm-ok')?.click());
 await page.waitForTimeout(400);
 const afterRemove = await page.evaluate(() => ({
   gold: window.app.run.gold,

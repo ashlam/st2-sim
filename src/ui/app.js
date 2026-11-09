@@ -1,5 +1,5 @@
 /** 应用外壳：屏幕路由 + 全部界面渲染 */
-import { Combat } from '../engine/combat.js';
+import { Combat, ENCHANTS } from '../engine/combat.js';
 import { Run } from '../engine/run.js';
 import { NODE_TYPES, reachable } from '../engine/map.js';
 import { CARDS, makeCard } from '../data/cards.js';
@@ -8,31 +8,51 @@ import { ENEMIES, ENCOUNTERS } from '../data/enemies.js';
 import { POWERS } from '../data/powers.js';
 import { ORBS } from '../data/orbs.js';
 import { EVENTS } from '../data/events.js';
+import { ANCIENTS } from '../data/ancients.js';
+import { FORGOTTEN_CARDS } from '../data/events-underdocks.js';
+import { RELIC_TRADABLE } from '../data/events-shared.js';
 import { CHARACTERS, CHARACTER_BY_ID } from '../data/characters.js';
 import { TERMS } from '../data/glossary.js';
 import { linkify, intentLabel, describeMove } from './inspect.js';
 
 const $ = (sel, root = document) => root.querySelector(sel);
 const SAVE_KEY = 'sts2sim.run.v1';
+const ENCHANT_NAMES = Object.fromEntries(Object.entries(ENCHANTS).map(([k, v]) => [k, v.name]));
+
+/** 三幕：索引 1..3，名称取自官方 zhs 本地化 acts.json */
+const ACT_INFO = {
+  1: { label: '第一幕', name: '密林', icon: '🌿', variant: 'OVERGROWTH' },
+  2: { label: '第二幕', name: '巢穴', icon: '🐝' },
+  3: { label: '第三幕', name: '荣耀', icon: '🏛️' },
+};
+/** 第一幕的两个变体（ActDefinition.GetRandomList 的第一组） */
+const ACT1_INFO = {
+  OVERGROWTH: { label: '第一幕', name: '密林', icon: '🌿' },
+  UNDERDOCK: { label: '第一幕', name: '暗港', icon: '🌊' },
+};
+const LAST_ACT = 3;
 
 const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-/** 卡牌文本渲染：{Var} 替换数值，[gold]..[/gold] 高亮 */
-function fmtText(def, card, combat) {
+/** 卡牌文本渲染：{Var} 替换数值，[gold]..[/gold] 高亮，opts.link 时牌名/状态名变成可点关键词 */
+function fmtText(def, card, combat, opts = {}) {
   let text = def.textFn ? def.textFn(card) : def.text;
   let vars = {};
   try { vars = def.vars ? def.vars(card, combat, card) : {}; } catch (e) { vars = {}; }
-  text = esc(text);
-  text = text.replace(/\[gold\]/g, '<span class="kw">').replace(/\[\/gold\]/g, '</span>');
-  text = text.replace(/\{([A-Za-z]+)\}/g, (m, k) => (vars[k] != null ? `<b class="num">${vars[k]}</b>` : ''));
-  return text.replace(/\n/g, '<br>');
+  // 数值先换占位符，等 linkify 转义/加链接后再填回去，否则 <b> 会被当成普通文本转义掉
+  const PH = '\u0001';
+  text = String(text).replace(/\{([A-Za-z]+)\}/g, (m, k) => (vars[k] != null ? `${PH}${k}${PH}` : ''));
+  let html = opts.link ? linkify(text) : esc(text);
+  html = html.replace(/\u0001([A-Za-z]+)\u0001/g, (m, k) => `<b class="num">${vars[k]}</b>`);
+  html = html.replace(/\[gold\]/g, '<span class="kw">').replace(/\[\/gold\]/g, '</span>');
+  return html.replace(/\n/g, '<br>');
 }
 
 function cardHTML(card, opts = {}) {
   const def = CARDS[card.id] || card.def;
   const cost = opts.combat ? opts.combat.costOf(card) : card.cost;
-  const typeLabel = { attack: '攻击', skill: '技能', power: '能力', status: '状态', curse: '诅咒' }[card.type] || '';
-  const glyph = { attack: '⚔', skill: '✧', power: '✦', status: '◇', curse: '✖' }[card.type] || '✧';
+  const typeLabel = { attack: '攻击', skill: '技能', power: '能力', status: '状态', curse: '诅咒', quest: '任务' }[card.type] || '';
+  const glyph = { attack: '⚔', skill: '✧', power: '✦', status: '◇', curse: '✖', quest: '🗝' }[card.type] || '✧';
   const disabled = opts.disabled ? ' disabled' : '';
   const sel = opts.selected ? ' selected' : '';
   const up = card.upgraded ? ' upgraded' : '';
@@ -41,11 +61,11 @@ function cardHTML(card, opts = {}) {
   const starView = rawStars === 'X' ? 'X' : (opts.combat ? opts.combat.starCostOf(card) : rawStars);
   const starBadge = (rawStars && rawStars !== 0)
     ? `<div class="card-stars">✦${starView}</div>` : '';
-  return `<div class="card ${card.type}${up}${disabled}${sel}" data-uid="${card.uid}" data-card="1">
+  return `<div class="card ${card.type}${up}${disabled}${sel}" data-uid="${card.uid}" data-card="1" data-card-id="${card.id}" data-card-up="${card.upgraded ? 1 : 0}">
     <div class="card-cost${cost === 0 ? ' free' : ''}${typeof cost === 'number' && cost < 0 ? ' none' : ''}">${cost === 'X' ? 'X' : (typeof cost === 'number' && cost < 0 ? '—' : cost)}</div>
     ${starBadge}
     <div class="card-name">${esc(card.name)}${card.upgraded ? '+' : ''}</div>
-    <div class="card-text">${fmtText(def, card, opts.combat)}</div>
+    <div class="card-text">${fmtText(def, card, opts.combat, { link: !!opts.link })}</div>
     <div class="card-type">${typeLabel}</div>
   </div>`;
 }
@@ -118,13 +138,92 @@ export class App {
     // 全局接管「关键词」点击：牌名、状态名、敌人名、遗物名、机制词
     // 放在捕获阶段，避免点击落在卡牌/敌人身上时又被出牌逻辑吃掉
     document.addEventListener('click', (ev) => {
+      // 长按看牌松手后紧跟的那次 click 要吞掉，否则会顺手把牌打出去 / 选中
+      if (this.swallowClick && Date.now() < (this.suppressClickUntil || 0)) {
+        this.swallowClick = false;
+        ev.preventDefault();
+        ev.stopPropagation();
+        return;
+      }
       const kw = ev.target.closest && ev.target.closest('[data-kw-kind]');
       if (!kw) return;
       ev.preventDefault();
       ev.stopPropagation();
       this.showKw(kw.dataset.kwKind, kw.dataset.kwId, kw.dataset.kwOwner, kw.dataset.kwStack);
     }, true);
+    this.initLongPress();
     this.showTitle();
+  }
+
+  /* ================= 长按看牌 ================= */
+  /**
+   * 长按任意卡面（手牌 / 卡牌奖励 / 商店卡牌 / 牌堆）弹出详情，松手不会触发出牌或选中。
+   * 短按行为完全不变：手牌出牌、奖励选中、商店开购买确认。
+   */
+  initLongPress() {
+    const LONG_MS = 400;
+    let timer = null, origin = null, longFired = false;
+
+    const clear = () => { if (timer) { clearTimeout(timer); timer = null; } origin = null; };
+
+    document.addEventListener('pointerdown', (ev) => {
+      if (ev.pointerType === 'mouse' && ev.button !== 0) return;
+      const el = ev.target.closest && ev.target.closest('[data-card], [data-buy-card]');
+      if (!el) return;
+      // 已经在详情层里的卡面不用再长按
+      if (el.closest('.kw-pop')) return;
+      origin = { x: ev.clientX, y: ev.clientY };
+      longFired = false;
+      timer = setTimeout(() => {
+        timer = null;
+        longFired = true;
+        this.peekCard(el);
+        if (navigator.vibrate) { try { navigator.vibrate(12); } catch (e) {} }
+      }, LONG_MS);
+    }, true);
+
+    // 手指划动（滚动手牌 / 翻列表）不算长按
+    document.addEventListener('pointermove', (ev) => {
+      if (!timer || !origin) return;
+      if (Math.abs(ev.clientX - origin.x) > 12 || Math.abs(ev.clientY - origin.y) > 12) {
+        clearTimeout(timer);
+        timer = null;
+        origin = null;
+      }
+    }, true);
+
+    document.addEventListener('pointerup', () => {
+      if (longFired) {
+        // 只吞掉长按松手带出来的这一下 click，之后正常点击不受影响
+        this.swallowClick = true;
+        this.suppressClickUntil = Date.now() + 700;
+        longFired = false;
+      }
+      clear();
+    }, true);
+
+    document.addEventListener('pointercancel', () => { longFired = false; clear(); }, true);
+  }
+
+  /** 长按某个卡面：优先用战斗里的实际牌（数值是当前生效的），否则退回牌面本身 */
+  peekCard(el) {
+    const buyRow = el.closest('[data-buy-card]');
+    if (buyRow) {
+      const item = this.shopStock?.cards?.[+buyRow.dataset.buyCard];
+      if (item && !item.sold) return this.showCardInfo(item.id, { upgraded: item.upgraded });
+      return;
+    }
+    const cardEl = el.closest('[data-card]');
+    if (!cardEl) return;
+    const uid = cardEl.dataset.uid;
+    const c = this.combat;
+    const live = c && uid
+      ? [...(c.hand || []), ...(c.drawPile || []), ...(c.discardPile || [])].find(x => x.uid === uid)
+      : null;
+    if (live) return this.showCardInfo(live.id, { card: live, combat: c });
+    if (cardEl.dataset.cardId) {
+      return this.showCardInfo(cardEl.dataset.cardId, { upgraded: cardEl.dataset.cardUp === '1' });
+    }
   }
 
   /* ================= 通用 ================= */
@@ -264,38 +363,41 @@ export class App {
     for (let i = 0; i < 8; i++) seed += seeds[Math.floor(Math.random() * seeds.length)];
     this.run = new Run(seed, asc, charId);
     this.save();
-    this.showNeow();
+    this.showAncient();
   }
 
-  showNeow() {
-    const opts = [
-      { t: '获得 8 点最大生命值', d: '涅奥的祝福', run: () => this.run.gainMaxHp(8) },
-      { t: '获得 100 金币', d: '涅奥的祝福', run: () => this.run.gainGold(100) },
-      { t: '获得一件随机遗物', d: '涅奥的祝福', run: () => this.run.addRelic(this.run.rollRelic('common')) },
-      { t: '移除一张牌', d: '涅奥的祝福', run: () => { this.neowRemove = true; } },
-      { t: '获得一张稀有牌', d: '涅奥的祝福', run: () => { this.neowRare = true; } },
-      { t: '将一张牌升级', d: '涅奥的祝福', run: () => { this.neowUpgrade = true; } },
-    ];
-    const picked = [];
-    const pool = opts.slice();
-    while (picked.length < 4) picked.push(pool.splice(Math.floor(Math.random() * pool.length), 1)[0]);
+  /** 幕首事件：先古之民（对照 RoomFactory.CreateAncientEventRoom + AncientEventModel） */
+  showAncient() {
+    const run = this.run;
+    const seen = run.relicData.ancientSeen || (run.relicData.ancientSeen = []);
+    const id = (run.actAncient || {})[run.act];
+    if (!id || seen.includes(run.act) || !ANCIENTS[id]) { this.showMap(); return; }
+    const def = ANCIENTS[id];
+    const opts = def.options(run);
 
     this.setOverlay(`<div class="sheet">
-      <div class="sheet-title">涅奥的馈赠</div>
-      <div class="sheet-sub">选择一项祝福，开始这一局。</div>
-      <div class="sheet-body"><div class="choices" id="neow-list"></div></div>
+      <div class="sheet-title">${def.icon} ${def.title}</div>
+      <div class="sheet-sub">${def.epithet} · 第 ${run.act} 幕</div>
+      <div class="sheet-body">
+        <div class="sheet-sub" style="white-space:pre-wrap;line-height:1.7">${esc(def.text)}</div>
+        <div class="choices" id="anc-list" style="margin-top:14px"></div>
+      </div>
     </div>`);
-    const list = $('#neow-list');
-    picked.forEach((o, i) => {
+    const list = $('#anc-list');
+    opts.forEach((o) => {
+      const d = RELICS[o.relic];
+      if (!d) return;
       const b = document.createElement('button');
       b.className = 'choice';
-      b.innerHTML = `<div class="t">${o.t}</div><div class="d">${o.d}</div>`;
+      b.innerHTML = `<div class="t">${d.icon || '◆'} ${d.name}</div><div class="d">${d.desc || ''}</div>`;
       b.onclick = async () => {
         this.clearOverlay();
-        o.run();
-        if (this.neowRemove) { this.neowRemove = false; await this.promptRemoveCard(); }
-        if (this.neowRare) { this.neowRare = false; this.run.addCard(this.run.rollCardReward(1, { rarity: 'rare' })[0]); }
-        if (this.neowUpgrade) { this.neowUpgrade = false; await this.promptUpgradeCard(); }
+        if (o.relic === 'SEA_GLASS' && o.charId) run.relicData.seaGlassChar = o.charId;
+        if (o.relic === 'DUSTY_TOME') run.relicData.dustyTome = true;
+        run.addRelic(o.relic);
+        seen.push(run.act);
+        this.save();
+        await this.flushRelicJobs();
         this.save();
         this.showMap();
       };
@@ -303,7 +405,223 @@ export class App {
     });
   }
 
+  /**
+   * 兑现先古遗物的「拾起时」选择。
+   * 遗物在 run.addRelic 里同步落账，需要玩家选牌的效果则以 job 形式入队，这里逐个弹面板。
+   */
+  async flushRelicJobs() {
+    const run = this.run;
+    const jobs = run.relicJobs || [];
+    if (!jobs.length) return;
+    run.relicJobs = [];
+    for (const job of jobs) {
+      try { await this.runRelicJob(job); } catch (err) { console.error('[relic job]', job, err); }
+    }
+  }
+
+  async runRelicJob(job) {
+    const run = this.run;
+    const pickEntry = (pred) => {
+      const pool = run.deck.filter(pred);
+      if (!pool.length) return null;
+      return pool;
+    };
+    switch (job.k) {
+      case 'remove': {
+        for (let i = 0; i < (job.n || 1); i++) await this.promptRemoveCard();
+        return;
+      }
+      case 'upgrade': {
+        for (let i = 0; i < (job.n || 1); i++) await this.promptUpgradeCard();
+        return;
+      }
+      case 'transform': {
+        for (let i = 0; i < (job.n || 1); i++) {
+          const pool = pickEntry((d) => CARDS[d.id] && !['status', 'curse'].includes(CARDS[d.id].rarity));
+          if (!pool) return;
+          const cards = pool.map((d) => makeCard(d.id, d.upgraded));
+          const picked = await this.requestSelection({ pool: cards, count: 1, prompt: '选择要变化的牌' });
+          if (!picked.length) return;
+          const entry = pool[cards.indexOf(picked[0])];
+          const newId = run.randomCard({ rarity: ['common', 'uncommon', 'rare'] });
+          if (entry && newId) run.transformEntry(entry, newId, job.upgrade ? true : entry.upgraded);
+        }
+        return;
+      }
+      case 'enchant': {
+        for (let i = 0; i < (job.n || 1); i++) {
+          const pool = run.deck.filter((d) => {
+            const def = CARDS[d.id];
+            if (!def) return false;
+            if (job.type && def.type !== job.type) return false;
+            return true;
+          });
+          if (!pool.length) return;
+          const cards = pool.map((d) => makeCard(d.id, d.upgraded));
+          const picked = await this.requestSelection({ pool: cards, count: 1, prompt: `选择要附魔「${ENCHANT_NAMES[job.enchant] || job.enchant}」的牌` });
+          if (!picked.length) return;
+          const entry = pool[cards.indexOf(picked[0])];
+          if (entry) entry.enchant = job.enchant;
+        }
+        return;
+      }
+      case 'reward': {
+        const opts = { rarity: job.rarity };
+        const ids = job.otherChar
+          ? this.otherCharacterCards(job.count || 3)
+          : job.colorless
+            ? run.rng.pickMany(Object.values(CARDS).filter((d) => d && d.char === 'NEUTRAL' && ['common', 'uncommon', 'rare'].includes(d.rarity)).map((d) => d.id), job.count || 2)
+            : run.rollCardReward(job.count || 3, opts);
+        if (ids.length) {
+          const picked = await this.pickCards(ids, '选择一张牌加入牌组', { optional: !!job.optional });
+          if (picked) run.addCard(picked.id);
+        }
+        if (job.extraCard) run.addCard(job.extraCard);
+        return;
+      }
+      case 'relicTiers': {
+        for (const t of job.tiers || []) {
+          const rid = run.rollRelic(t);
+          if (rid) run.addRelic(rid);
+        }
+        return;
+      }
+      case 'ancientRelics': {
+        const pool = Object.keys(RELICS).filter((id) => RELICS[id].rarity === 'ancient'
+          && !['NEOWS_BONES', 'MASSIVE_SCROLL'].includes(id) && !run.relics.includes(id));
+        for (let i = 0; i < (job.n || 2); i++) {
+          const rid = run.rng.pick(pool);
+          if (rid) { run.addRelic(rid); pool.splice(pool.indexOf(rid), 1); }
+        }
+        if (job.thenCurse) {
+          const c = run.randomCurse();
+          if (c) run.addCard(c);
+        }
+        return;
+      }
+      case 'tooth': {
+        const n = job.n || 5;
+        for (let i = 0; i < n; i++) {
+          const pool = run.deck.filter((d) => !d.upgraded && d.crafts == null && CARDS[d.id]);
+          if (!pool.length) break;
+          const cards = pool.map((d) => makeCard(d.id, d.upgraded));
+          const picked = await this.requestSelection({ pool: cards, count: 1, prompt: `「佩尔之牙」：选择第 ${i + 1}/${n} 张牌移除` });
+          if (!picked.length) break;
+          const entry = pool[cards.indexOf(picked[0])];
+          if (!entry) continue;
+          run.deck.splice(run.deck.indexOf(entry), 1);
+          (run.relicData.toothStore || (run.relicData.toothStore = [])).push({ id: entry.id });
+        }
+        return;
+      }
+      case 'maul': {
+        const pool = run.deck.filter((d) => CARDS[d.id]?.type !== 'quest' && CARDS[d.id]?.type !== 'curse');
+        const cards = pool.map((d) => makeCard(d.id, d.upgraded));
+        const picked = await this.requestSelection({ pool: cards, count: job.n || 6, prompt: `选择至多 ${job.n} 张牌变化为「撕咬」` });
+        for (const card of picked) {
+          const entry = pool[cards.indexOf(card)];
+          if (!entry) continue;
+          const keepEnchant = entry.enchant;
+          run.transformEntry(entry, 'MAUL', entry.upgraded);
+          if (keepEnchant) entry.enchant = keepEnchant;
+        }
+        return;
+      }
+      case 'bundle': {
+        const mk = () => {
+          const out = [];
+          const used = new Set();
+          for (const r of ['common', 'common', 'uncommon']) {
+            const pool = run.poolByRarity(r).filter((id) => !used.has(id));
+            if (!pool.length) continue;
+            const id = run.rng.pick(pool);
+            used.add(id);
+            out.push(id);
+          }
+          return out;
+        };
+        const bundles = [mk(), mk()];
+        const picked = await this.requestSelection({
+          pool: bundles.map((b) => makeCard(b[0])), count: 1, prompt: '选择一包卡牌（点选后再看第二包）',
+        });
+        const idx = picked.length ? bundles.findIndex((b) => b[0] === picked[0].id) : 0;
+        for (const id of (bundles[idx >= 0 ? idx : 0] || [])) run.addCard(id);
+        return;
+      }
+      case 'seaglass': {
+        const charId = job.charId || run.relicData.seaGlassChar;
+        const ids = [];
+        const used = new Set();
+        let guard = 0;
+        while (ids.length < 15 && guard++ < 200) {
+          for (const r of ['common', 'uncommon', 'rare']) {
+            const pool = Object.values(CARDS)
+              .filter((d) => d && d.char === charId && d.rarity === r && !used.has(d.id))
+              .map((d) => d.id);
+            if (!pool.length) continue;
+            const id = run.rng.pick(pool);
+            used.add(id);
+            ids.push(id);
+            if (ids.length >= 15) break;
+          }
+        }
+        const cards = ids.map((id) => makeCard(id));
+        const picked = await this.requestSelection({ pool: cards, count: cards.length, prompt: '「海玻璃」：选择任意数量的牌加入牌组' });
+        for (const c of picked) run.addCard(c.id);
+        return;
+      }
+      case 'dustyTome': {
+        const pool = Object.values(CARDS)
+          .filter((d) => d && d.rarity === 'ancient' && d.char && d.char === run.charId
+            && !['BREAK', 'SUPPRESS', 'PROTECTOR', 'METEOR_SHOWER', 'QUADCAST'].includes(d.id))
+          .map((d) => d.id);
+        const shared = Object.values(CARDS)
+          .filter((d) => d && d.rarity === 'ancient' && d.char === 'NEUTRAL')
+          .map((d) => d.id);
+        const all = [...pool, ...shared];
+        const id = all.length ? run.rng.pick(all) : null;
+        if (id) run.addCard(id, true);
+        return;
+      }
+      default:
+        return;
+    }
+  }
+
+  /** 取一批其他角色的牌（万花筒 / 海玻璃） */
+  otherCharacterCards(n = 3) {
+    const run = this.run;
+    const others = ['IRONCLAD', 'SILENT', 'DEFECT', 'REGENT', 'NECROBINDER'].filter((c) => c !== run.charId);
+    const pools = run.rng.shuffle(others).slice(0, 3);
+    const out = [];
+    for (const c of pools) {
+      const list = Object.values(CARDS)
+        .filter((d) => d && d.char === c && ['common', 'uncommon', 'rare'].includes(d.rarity))
+        .map((d) => d.id);
+      if (list.length) out.push(run.rng.pick(list));
+    }
+    return out.slice(0, n);
+  }
+
   /* ================= 地图 ================= */
+  /** 进入新一幕的过场 */
+  showActIntro() {
+    const run = this.run;
+    const info = (run.act === 1 && ACT1_INFO[run.act1]) || ACT_INFO[run.act] || ACT_INFO[1];
+    this.screen = 'act-intro';
+    this.clearOverlay();
+    this.root.innerHTML = `
+      <div class="screen act-intro">
+        <div class="act-icon">${info.icon}</div>
+        <div class="act-label">${info.label}</div>
+        <div class="act-name">${info.name}</div>
+        <div class="act-line"></div>
+        <div class="act-sub">第 ${run.floor} 层 · 生命 ${run.hp} / ${run.maxHp} · 牌组 ${run.deck.length} 张</div>
+        <button class="btn primary" id="act-go" style="width:min(70%,280px);margin-top:26px">继续攀登</button>
+      </div>`;
+    $('#act-go').onclick = () => { this.save(); this.showAncient(); };
+  }
+
   showMap() {
     this.screen = 'map';
     this.selectedCard = null;
@@ -311,7 +629,14 @@ export class App {
     this.clearOverlay();
     const run = this.run;
     const available = reachable(run.map, run.curNode);
-    const availIds = new Set(available.map(n => n.id));
+    // 飞翼靴：可以无视连线，直接跳到下一排的任意房间（3 次）
+    const boots = run.relicData.wingedBoots || 0;
+    const curRow = run.curNode ? run.curNode.row : -1;
+    const bootsNodes = boots > 0
+      ? run.map.nodes.filter(n => n.row === curRow + 1 && n.type !== 'boss' && !available.includes(n))
+      : [];
+    this._bootsNodes = bootsNodes.map(n => n.id);
+    const availIds = new Set([...available, ...bootsNodes].map(n => n.id));
 
     const rowH = 74, colW = 48;
     const width = colW * (run.map.cols - 1) + 40;
@@ -354,7 +679,7 @@ export class App {
         </div>
         <div class="relic-strip">${run.relics.map(relicSlot).join('')}${run.potions.map(p => p ? `<div class="potion" data-potion-info="${p}">${POTIONS[p].icon}</div>` : '<div class="potion empty">·</div>').join('')}</div>
         <div class="map-head">
-          <div class="dim small">第 ${run.floor} 层 · 第一幕 · 蔓生之地</div>
+          <div class="dim small">第 ${run.floor} 层 · ${ACT_INFO[run.act].label} · ${ACT_INFO[run.act].name}</div>
           <div class="spacer"></div>
           <button class="btn small" id="deck-btn" style="padding:7px 12px">牌组 ${run.deck.length}</button>
         </div>
@@ -408,6 +733,41 @@ export class App {
     return el;
   }
 
+  /**
+   * 通用确认弹层，返回 Promise<boolean>。
+   * 用于「点一下就落地、且不可撤销」的选择（战利品、事件选项、删牌/升级）。
+   * 挂在 body 上而不是 #overlay-layer 里，所以可以叠在任何浮层之上。
+   */
+  askConfirm({ title = '确认？', sub = '', body = '', okText = '确认', cancelText = '取消' } = {}) {
+    document.querySelectorAll('.cfm-pop').forEach(x => x.remove());
+    return new Promise((resolve) => {
+      const el = document.createElement('div');
+      el.className = 'cfm-pop';
+      el.innerHTML = `<div class="cfm-box">
+        <div class="cfm-title">${esc(title)}</div>
+        ${sub ? `<div class="cfm-sub">${esc(sub)}</div>` : ''}
+        ${body ? `<div class="cfm-body">${body}</div>` : ''}
+        <div class="cfm-actions">
+          <button class="btn cfm-cancel">${esc(cancelText)}</button>
+          <button class="btn primary cfm-ok">${esc(okText)}</button>
+        </div>
+      </div>`;
+      document.body.appendChild(el);
+      let settled = false;
+      const finish = (v) => {
+        if (settled) return;
+        settled = true;
+        el.remove();
+        resolve(v);
+      };
+      el.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        if (ev.target.closest('.cfm-ok')) finish(true);
+        else if (ev.target === el || ev.target.closest('.cfm-cancel')) finish(false);
+      });
+    });
+  }
+
   /** 统一入口：卡片/状态/敌人/遗物/药水/机制词 */
   showKw(kind, id, ownerUid, stackHint) {
     if (!kind || !id) return;
@@ -457,7 +817,12 @@ export class App {
     });
   }
 
-  showCardInfo(id) {
+  /**
+   * 卡牌详情。opts.card 传战斗里的实际牌实例（数值随力量/格挡等实时变化），
+   * opts.combat 传当前战斗，opts.upgraded 指定是展示升级版。
+   * 正文里的牌名/状态名都可点，点了接着看那条说明。
+   */
+  showCardInfo(id, opts = {}) {
     let def = CARDS[id];
     // 两个角色都有「打击」「防御」，按当前角色找同名的那张
     if (def && this.run && def.char !== this.run.charId && def.char !== 'NEUTRAL') {
@@ -465,19 +830,36 @@ export class App {
       if (alt) { id = alt.id; def = alt; }
     }
     if (!def) return;
-    const card = makeCard(id, false);
-    const upCard = makeCard(id, true);
-    const baseText = fmtText(def, card, null);
-    const upText = fmtText(def, upCard, null);
+    const combat = opts.combat || null;
+    const card = (opts.card && opts.card.id === id) ? opts.card : makeCard(id, !!opts.upgraded);
+    const other = makeCard(id, !card.upgraded);
+    const curText = fmtText(def, card, combat, { link: true });
+    const otherText = fmtText(def, other, combat, { link: true });
+
     const typeLabel = { attack: '攻击', skill: '技能', power: '能力', status: '状态', curse: '诅咒' }[def.type] || '';
-    const rarityLabel = { common: '普通', uncommon: '罕见', rare: '稀有', starter: '初始', basic: '初始', status: '状态', curse: '诅咒' }[def.rarity] || '';
+    const rarityLabel = { common: '普通', uncommon: '罕见', rare: '稀有', starter: '初始', basic: '初始', status: '状态', curse: '诅咒', event: '事件', quest: '任务' }[def.rarity] || '';
     const starLabel = def.stars ? ` · ✦ ${def.stars === 'X' ? 'X' : def.stars} 星愿` : '';
-    const sub = [typeLabel, rarityLabel, typeof def.cost === 'number' ? `${def.cost} 费` : 'X 费'].filter(Boolean).join(' · ') + starLabel;
+    const costNow = combat ? combat.costOf(card) : card.cost;
+    const costLabel = costNow === 'X'
+      ? 'X 费'
+      : (typeof costNow === 'number' ? `${costNow < 0 ? '—' : costNow} 费` : '');
+    const sub = [typeLabel, rarityLabel, costLabel].filter(Boolean).join(' · ') + starLabel;
+
     const body = `
-      <div class="kw-cardwrap">${cardHTML(card)}</div>
-      <p class="kw-p">${baseText}</p>
-      ${upText !== baseText ? `<div class="kw-sec">升级后</div><p class="kw-p">${upText}</p>` : '<div class="kw-note">这张牌没有升级效果。</div>'}`;
-    this.showInfo({ title: card.name, sub, body });
+      <div class="kw-cardwrap">${cardHTML(card, { combat, link: true })}</div>
+      ${otherText !== curText
+        ? `<div class="kw-sec">${card.upgraded ? '未升级' : '升级后'}</div><p class="kw-p">${otherText}</p>`
+        : '<div class="kw-note">这张牌没有升级效果。</div>'}
+      <div class="kw-note">点卡面/说明里高亮的关键词，可以看那条效果的详细说明。</div>`;
+    const el = this.showInfo({ title: `${card.name}${card.upgraded ? '+' : ''}`, sub, body });
+    // 牌面放不下时（文字长）补一段完整说明，短牌就不重复一遍了
+    const ct = el?.querySelector('.kw-cardwrap .card-text');
+    if (ct && ct.scrollHeight > ct.clientHeight + 1) {
+      const p = document.createElement('p');
+      p.className = 'kw-p kw-p-full';
+      p.innerHTML = curText;
+      el.querySelector('.kw-cardwrap').after(p);
+    }
   }
 
   showEnemyInfo(uidOrId) {
@@ -611,32 +993,33 @@ export class App {
     };
   }
 
-  showCardDetail(card) {
-    const def = CARDS[card.id];
-    if (!def) return;
-    const typeLabel = { attack: '攻击', skill: '技能', power: '能力', status: '状态', curse: '诅咒' }[def.type] || '';
-    const sorted = makeCard(card.id, true);
-    const curText = fmtText(def, card, null);
-    const upText = fmtText(def, sorted, null);
-    const body = `
-      <div class="kw-cardwrap">${cardHTML(card)}</div>
-      <p class="kw-p">${curText}</p>
-      ${!card.upgraded && upText !== curText ? `<div class="kw-sec">升级后</div><p class="kw-p">${upText}</p>` : ''}
-      ${card.upgraded ? '<div class="kw-note">这张牌已经升级过了。</div>' : ''}`;
-    this.showInfo({
-      title: `${card.name}${card.upgraded ? '+' : ''}`,
-      sub: `${typeLabel}${typeof card.cost === 'number' ? ` · ${card.cost} 费` : ' · X 费'}${card.stars ? ` · ✦ ${card.stars === 'X' ? 'X' : card.stars} 星愿` : ''}`,
-      body,
-    });
+  showCardDetail(card, combat = null) {
+    if (!card || !CARDS[card.id]) return;
+    this.showCardInfo(card.id, { card, combat });
   }
 
   /* ================= 进入节点 ================= */
   enterNode(node) {
+    // 飞翼靴：跳过了连线才消耗一次
+    if ((this.run.relicData.wingedBoots || 0) > 0 && (this._bootsNodes || []).includes(node.id)) {
+      this.run.relicData.wingedBoots -= 1;
+      this.toast(`飞翼靴：还剩 ${this.run.relicData.wingedBoots} 次`);
+    }
     this.run.curNode = node;
     node.visited = true;
     this.run.floor++;
     this.run.stats.floors = this.run.floor;
+    // 巨口储蓄罐：每攀爬一层给 12 金币（在商店花过钱就失效）
+    this.run.notifyRoomEntered();
     const t = node.type;
+    // 探测棒：走完 5 个未知房间后变成「丰饶」
+    if (t === 'unknown') {
+      for (const e of this.run.deck) {
+        if (e.id !== 'DOWSING') continue;
+        e.dowsing = (e.dowsing || 0) + 1;
+        if (e.dowsing >= 5) this.run.transformEntry(e, 'ABUNDANCE');
+      }
+    }
     if (t === 'boss') return this.startCombat('boss', node);
     if (t === 'elite') return this.startCombat('elite', node);
     if (t === 'monster') return this.startCombat('normal', node);
@@ -647,6 +1030,8 @@ export class App {
   }
 
   resolveUnknown(node) {
+    // 黄金罗盘的特殊直道：每一格都是事件
+    if (node.golden) return this.showEvent();
     const r = Math.random();
     const noCombat = this.run.relics.includes('JUZU_BRACELET');
     if (!noCombat && r < 0.25) return this.startCombat('normal', node);
@@ -656,9 +1041,10 @@ export class App {
   }
 
   /* ================= 战斗 ================= */
-  startCombat(kind, node) {
-    const enc = this.run.rollEncounter(kind);
+  startCombat(kind, node, forcedEnc = null, afterEvent = null) {
+    const enc = forcedEnc || this.run.rollEncounter(kind);
     this.run.combatCount++;
+    this._eventCombatAfter = afterEvent;
     this.combat = new Combat(this.run, enc, { speed: window.DEBUG_SPEED ?? 1 });
     this.combat.onUpdate = () => this.renderCombat();
     this.combat.onFloat = (target, text, kind2) => this.floatAt(target, text, kind2);
@@ -666,14 +1052,73 @@ export class App {
     this.combat.requestSelection = (opts) => this.requestSelection(opts);
     this.selectedCard = null;
     this.pendingPotion = null;
+    this._finishing = null;
+    this.combatResolved = false;
+    clearTimeout(this._finishWatchdog);
+    clearTimeout(this._finishFallback);
     this.renderCombat(true);
     this.combat.start();
+  }
+
+  /**
+   * 战斗结束的统一入口。
+   * onCombatFinished 是异步的，以前在 renderCombat / playSelected / onEndTurn / tapPotion
+   * 里都是裸调：一旦奖励生成、存档或换幕里抛错，就变成未处理的 Promise rejection，
+   * 界面停在最后一帧、战斗日志停在「XX 被击败」，看起来就是"消灭最后一个敌人后卡住"。
+   * 这里统一接住异常，并加一个超时重试，保证流程一定能往下走。
+   */
+  finishCombat() {
+    const c = this.combat;
+    if (!c || !c.finished) return;
+    if (this._finishing === c) return;             // 同一次结算只发起一次
+    this._finishing = c;
+
+    const settle = () => {
+      this._finishing = null;
+      clearTimeout(this._finishWatchdog);
+      clearTimeout(this._finishFallback);
+    };
+    Promise.resolve()
+      .then(() => this.onCombatFinished())
+      .then(settle, (err) => this.combatFinishFailed(err, c));
+
+    clearTimeout(this._finishWatchdog);
+    clearTimeout(this._finishFallback);
+    this._finishWatchdog = setTimeout(() => {
+      if (this.combat !== c || !c.finished) return;              // 已正常结算
+      if (document.querySelector('.overlay-layer:not(.hidden) .sheet-title')) return; // 战利品已弹出
+      console.warn('[combat] 结算超时，重试一次');
+      this.combatResolved = false;
+      Promise.resolve()
+        .then(() => this.onCombatFinished())
+        .then(settle, (err) => this.combatFinishFailed(err, c));
+      // 重试也可能卡在 await 上（不抛错、不返回），再给一道强制超时
+      this._finishFallback = setTimeout(() => {
+        if (this.combat !== c || !c.finished) return;
+        if (document.querySelector('.overlay-layer:not(.hidden) .sheet-title')) return;
+        this.combatFinishFailed(new Error('结算重试后仍无响应'), c);
+      }, 2500);
+    }, 2500);
+  }
+
+  /** 结算链路彻底失败时的兜底：宁可丢掉本次战利品，也不能把玩家冻在战斗画面 */
+  combatFinishFailed(err, c) {
+    console.error('[combat finish]', err);
+    clearTimeout(this._finishWatchdog);
+    clearTimeout(this._finishFallback);
+    this._finishing = null;
+    if (this.combat !== c) return;
+    this.combat = null;
+    this.combatResolved = false;
+    this.save();
+    this.toast('战斗结算异常，已跳过本次战利品', 3000);
+    try { this.showMap(); } catch { this.showTitle(); }
   }
 
   renderCombat(first = false) {
     const c = this.combat;
     if (!c) return;
-    if (c.finished) { this.onCombatFinished(); return; }
+    if (c.finished) { this.finishCombat(); return; }
     const run = this.run;
     const scrollLeft = $('.hand')?.scrollLeft || 0;
 
@@ -681,7 +1126,7 @@ export class App {
       if (!e.alive) return '';
       const intent = c.intentOf(e);
       let intentHtml = '';
-      const cls = intent.type === 'attack' ? 'attack' : intent.type === 'defend' ? 'defend' : intent.type === 'buff' ? 'buff' : ['debuff', 'status', 'sleep', 'stun'].includes(intent.type) ? 'debuff' : '';
+      const cls = intent.type === 'attack' ? 'attack' : intent.type === 'defend' ? 'defend' : intent.type === 'buff' ? 'buff' : ['debuff', 'status', 'sleep', 'stun', 'escape', 'summon', 'heal'].includes(intent.type) ? 'debuff' : '';
       if (intent.type === 'attack') intentHtml = `⚔ ${intent.dmg}${intent.times > 1 ? ` ×${intent.times}` : ''}`;
       else if (intent.type === 'defend') intentHtml = `🛡 ${intent.block}`;
       else if (intent.type === 'buff') intentHtml = '💪 强化';
@@ -689,6 +1134,9 @@ export class App {
       else if (intent.type === 'status') intentHtml = '🃏 塞牌';
       else if (intent.type === 'sleep') intentHtml = '💤 沉睡';
       else if (intent.type === 'stun') intentHtml = '💫 眩晕';
+      else if (intent.type === 'escape') intentHtml = '🏃 逃跑';
+      else if (intent.type === 'summon') intentHtml = '➕ 召唤';
+      else if (intent.type === 'heal') intentHtml = '❤ 回复';
       const hpPct = (e.hp / e.maxHp) * 100;
       const blockedPct = e.block > 0 ? Math.min(100 - hpPct, (e.block / e.maxHp) * 100) : 0;
       const targetable = this.selectedCard && this.selectedCard.target === 'enemy' ? 'targetable' : '';
@@ -812,13 +1260,14 @@ export class App {
     this.selectedCard = null;
     this.renderCombat();
     await this.combat.playCard(card, target);
-    if (this.combat && this.combat.finished) this.onCombatFinished();
+    if (this.combat && this.combat.finished) this.finishCombat();
     else this.renderCombat();
   }
 
   banner(text, cls = '') {
     const d = document.createElement('div');
-    d.className = 'turn-banner ' + cls;
+    // 修饰类必须带自己的前缀：直接叫 enemy 会撞上敌人卡的 .enemy { width:96px }，把横幅挤成竖排
+    d.className = 'turn-banner' + (cls ? ` turn-banner--${cls}` : '');
     d.textContent = text;
     this.fx.appendChild(d);
     setTimeout(() => d.remove(), 1100);
@@ -831,7 +1280,7 @@ export class App {
     this.banner('敌人回合', 'enemy');
     await this.combat.endTurn();
     if (this.combat && !this.combat.finished) this.banner('你的回合', 'player');
-    if (this.combat && this.combat.finished) this.onCombatFinished();
+    if (this.combat && this.combat.finished) this.finishCombat();
     else this.renderCombat();
   }
 
@@ -862,7 +1311,7 @@ export class App {
     }
     this.run.removePotion(i);
     this.renderCombat();
-    if (this.combat && this.combat.finished) this.onCombatFinished();
+    if (this.combat && this.combat.finished) this.finishCombat();
   }
 
   /** 战斗记录：按回合分组，可复制成纯文本便于复盘。独立弹层，任何界面都能打开 */
@@ -967,7 +1416,7 @@ export class App {
       const el = e.target.closest('[data-uid]');
       if (!el) return;
       const card = sorted.find(x => x.uid === el.dataset.uid);
-      if (card) this.showCardDetail(card);
+      if (card) this.showCardDetail(card, c);
     };
   }
 
@@ -998,6 +1447,9 @@ export class App {
     const c = this.combat;
     if (!c || this.combatResolved) return;
     this.closeInfo();
+    // 战斗记录浮层是挂在 body 上的独立层（z-index 高于战利品），
+    // 战斗结束时如果不收掉，它会盖住刚弹出的战利品，看起来像卡死。
+    document.querySelectorAll('.log-modal').forEach(x => x.remove());
     this.combatResolved = true;
     await c.finish();
     const win = c.won;
@@ -1011,9 +1463,18 @@ export class App {
     }
     const isBoss = c.isBoss;
     const isElite = c.isElite;
+    // 敌人溜走（训练假人限时）：没有战利品，回到事件
+    if (c.timedOut) {
+      this.combat = null;
+      const after = this._eventCombatAfter;
+      this._eventCombatAfter = null;
+      if (after) return after(false);
+      return this.showMap();
+    }
     this.run.stats.combats++;
-    if (isElite) this.run.stats.elites++;
+    if (isElite) { this.run.stats.elites++; this.run.notifyEliteWin(); }
     if (isBoss) this.run.stats.bosses++;
+    this.run.notifyCombatWon(isElite, isBoss, c.run.curNode?.type || (isBoss ? 'boss' : 'monster'));
 
     const rewards = [];
     const gold = this.run.goldForCombat(isElite, isBoss);
@@ -1026,10 +1487,24 @@ export class App {
       const rid = this.run.rollBossRelic();
       if (rid) rewards.push({ kind: 'relic', id: rid });
     }
-    const cards = this.run.rollCardReward(isBoss ? 3 : 3);
-    rewards.push({ kind: 'cards', ids: cards });
+    // 熔岩石：第一幕的 Boss 额外掉落 2 件遗物
+    if (isBoss && !this.run.relicData.lavaRockUsed && this.run.relics.includes('LAVA_ROCK')) {
+      this.run.relicData.lavaRockUsed = true;
+      for (let i = 0; i < 2; i++) {
+        const rid = this.run.rollRelic();
+        if (rid) rewards.push({ kind: 'relic', id: rid });
+      }
+    }
+    const cards = this.run.rollCardReward(3);
+    rewards.push({ kind: 'cards', ids: cards, entries: this.run.rewardMods(cards) });
     const potion = this.run.rollPotion();
     if (potion && this.run.potions.includes(null)) rewards.push({ kind: 'potion', id: potion });
+    // 旺购神秘券：攒够 5 场战斗后一次性发 3 件遗物
+    while ((this.run.pendingRelicRewards || 0) > 0) {
+      const rid = this.run.rollRelic();
+      if (rid) rewards.push({ kind: 'relic', id: rid });
+      this.run.pendingRelicRewards--;
+    }
     // 禁忌魔典：本场战斗结束后额外给的移除机会，在点「继续」之后弹出
     const removals = c.necro?.grimoireRemovals || 0;
     if (removals > 0) { c.necro.grimoireRemovals = 0; rewards.push({ kind: 'remove', count: removals }); }
@@ -1048,15 +1523,34 @@ export class App {
       this.run.bossQueue.shift();
       await this.showRewards(rewards, () => afterRewards(() => {
         if (this.run.bossQueue.length) {
+          // 进阶 10 的双首领：同一幕接着打第二个
           this.run.heal(Math.floor(this.run.maxHp * 0.25));
           this.startCombat('boss', null);
-        } else {
-          this.showGameOver(true);
+          return;
         }
+        // 对照 RunEngine：最后一幕的首领倒下才算通关，否则进入下一幕
+        if (this.run.act >= LAST_ACT) { this.showGameOver(true); return; }
+        this.run.startAct(this.run.act + 1);
+        // 黄金罗盘：第 2 幕的地图被换成一条全是事件的特殊直道
+        if (this.run.act === 2 && this.run.relicData.goldenCompass) {
+          for (const n of this.run.map.nodes) {
+            if (n.type !== 'boss' && n.type !== 'rest' && n.row > 0) { n.type = 'unknown'; n.golden = true; }
+          }
+        }
+        this.save();
+        this.showActIntro();
       }));
       return;
     }
-    this.showRewards(rewards, () => afterRewards(() => this.showMap()));
+    this.showRewards(rewards, () => afterRewards(() => {
+      // 事件里发起的战斗：奖励照拿，然后回到事件自己的后续流程
+      const after = this._eventCombatAfter;
+      if (after) {
+        this._eventCombatAfter = null;
+        return after(true);
+      }
+      this.showMap();
+    }));
   }
 
   /** 领取一项战利品，返回用于提示的名字；领不了（药水栏满）返回 null。卡牌不在这里处理 */
@@ -1077,31 +1571,44 @@ export class App {
     }).join('');
 
     const cardChoices = rewards.find(r => r.kind === 'cards');
+    const cardList = cardChoices
+      ? (cardChoices.entries || cardChoices.ids.map(id => ({ id, upgraded: false, enchant: null })))
+      : [];
+    const cardGrid = cardList.length
+      ? cardList.map(o => cardHTML(makeCard(o.id, !!o.upgraded), {})).join('')
+      : '<div class="sheet-sub" style="padding:10px 0">这次没有卡牌奖励</div>';
     this.setOverlay(`<div class="sheet">
       <div class="sheet-title">战利品</div>
-      <div class="sheet-sub">选一张卡牌加入牌组。金币和道具可以现在点，也可以留到点「继续」时一起收下。</div>
+      <div class="sheet-sub">选一张卡牌加入牌组。长按卡牌可以先看完整说明，选好后会再确认一次。</div>
       <div class="sheet-body">
         <div class="choices" id="loot-list">${items}</div>
         <div class="sheet-sub" style="margin-top:16px">卡牌奖励</div>
         <div class="reward-grid" id="card-reward">
-          ${cardChoices.ids.map(id => cardHTML(makeCard(id), {})).join('')}
+          ${cardGrid}
         </div>
       </div>
       <div class="reward-tip" id="reward-tip">点「继续」会收下所有还没领的金币和道具</div>
       <div class="log-actions">
         <button class="btn" id="view-log">📜 上一战记录</button>
-        <button class="btn primary" id="skip-reward">跳过卡牌，继续</button>
+        <button class="btn primary" id="skip-reward">${cardChoices ? '跳过卡牌，继续' : '继续'}</button>
       </div>
     </div>`);
 
     const taken = new Set();
-    this.overlay.onclick = (e) => {
+    let cardPicked = false;
+    this.overlay.onclick = async (e) => {
       if (e.target.closest('#view-log')) { this.showCombatLog(); return; }
       const rEl = e.target.closest('[data-reward]');
       if (rEl) {
         const i = +rEl.dataset.reward;
         if (taken.has(i)) return;
         const r = rewards[i];
+        // 药水栏位先检查，别让玩家确认完才发现收不下
+        if (r.kind === 'potion' && !this.run.potions.includes(null)) { this.toast('药水栏位已满，先喝掉一瓶'); return; }
+        if (!(await this.askConfirm(this.rewardConfirm(r)))) return;
+        // 确认期间界面可能已经翻页（点「继续」等），收手
+        if (!$('#loot-list')) return;
+        if (taken.has(i)) return;
         const name = this.grantReward(r);
         if (!name) { this.toast('药水栏位已满，先喝掉一瓶'); return; }
         taken.add(i);
@@ -1111,13 +1618,27 @@ export class App {
         return;
       }
       const cardEl = e.target.closest('#card-reward [data-uid]');
-      if (cardEl) {
+      if (cardEl && cardChoices) {
+        if (cardPicked) return;
         const idx = [...$('#card-reward').children].indexOf(cardEl);
-        const id = cardChoices.ids[idx];
-        this.run.addCard(id);
-        this.toast(`获得 ${CARDS[id].name}`);
-        $('#card-reward').style.opacity = '.35';
-        $('#card-reward').style.pointerEvents = 'none';
+        const opt = cardList[idx];
+        if (!opt) return;
+        const def = CARDS[opt.id];
+        const typeLabel = { attack: '攻击', skill: '技能', power: '能力', status: '状态', curse: '诅咒' }[def.type] || '';
+        const ok = await this.askConfirm({
+          title: `确认选择「${def.name}」？`,
+          sub: `${typeLabel}${typeof def.cost === 'number' ? ` · ${def.cost} 费` : ' · X 费'}${def.stars ? ` · ✦ ${def.stars} 星愿` : ''}`,
+          body: '确认后这张牌加入牌组，本次另外两张卡牌奖励视为放弃。',
+          okText: '加入牌组',
+          cancelText: '再看看',
+        });
+        if (!ok || cardPicked || !$('#card-reward')) return;
+        const entry = this.run.addCard(opt.id, !!opt.upgraded);
+        if (opt.enchant && entry) entry.enchant = opt.enchant;
+        cardPicked = true;
+        // 只标记被选中的那张，另外两张淡化但仍可长按看牌，避免整片变黑看不懂发生了什么
+        [...$('#card-reward').children].forEach(el => el.classList.add(el === cardEl ? 'picked' : 'unpicked'));
+        this.toast(`获得 ${CARDS[opt.id].name}`);
         $('#skip-reward').textContent = '继续';
         this.updateRewardTip(rewards, taken, cardChoices, true);
         return;
@@ -1140,6 +1661,22 @@ export class App {
     this.updateRewardTip(rewards, taken, cardChoices);
   }
 
+  /** 战利品里非卡牌单项的确认文案 */
+  rewardConfirm(r) {
+    if (r.kind === 'gold') {
+      return { title: `领取 ${r.amount} 金币？`, sub: `当前持有 ${this.run.gold} 金币`, okText: `领取 ${r.amount} 金币`, cancelText: '取消' };
+    }
+    if (r.kind === 'relic') {
+      const d = RELICS[r.id];
+      return { title: `收下遗物「${d.name}」？`, sub: d.desc, okText: '收下遗物', cancelText: '取消' };
+    }
+    if (r.kind === 'potion') {
+      const d = POTIONS[r.id];
+      return { title: `收下药水「${d.name}」？`, sub: d.desc, okText: '收下药水', cancelText: '取消' };
+    }
+    return { title: '确认领取？', okText: '确认', cancelText: '取消' };
+  }
+
   /** 奖励页底部提示：还没领的还剩几项 */
   updateRewardTip(rewards, taken, cardChoices, cardPicked = false) {
     const el = $('#reward-tip');
@@ -1155,14 +1692,63 @@ export class App {
   /* ================= 休息处 ================= */
   showRest() {
     const run = this.run;
+    // 古茶具套装：到过休息处后，下一场战斗第一回合多 1 点能量
+    if (run.relics.includes('FAKE_VENERABLE_TEA_SET')) run.relicData.teaSetArmed = true;
     const healAmt = Math.floor(run.maxHp * (run.asc >= 2 ? 0.25 : 0.3));
     const feather = run.relics.includes('ETERNAL_FEATHER') ? Math.floor(run.deck.length / 5) * 3 : 0;
     const canGirya = run.relics.includes('GIRYA') && (run.giryaCount || 0) < 3;
 
     const choices = [];
-    choices.push({ label: `休息 · 回复 ${healAmt + feather} 点生命`, desc: feather ? `（含永恒羽毛 ${feather} 点）` : '', act: () => { run.heal(healAmt + feather); } });
+    choices.push({
+      label: `休息 · 回复 ${healAmt + feather} 点生命`,
+      desc: feather ? `（含永恒羽毛 ${feather} 点）` : '',
+      act: async () => {
+        run.heal(healAmt + feather);
+        run.notifyRestHeal();
+        // 捕梦网：休息时可以再挑一张牌加入牌组
+        if (run.relics.includes('DREAM_CATCHER')) await this.cardReward();
+      },
+    });
     choices.push({ label: '锻造 · 升级一张牌', desc: '选择牌组中的一张牌升级', act: async () => { await this.promptUpgradeCard(); } });
+    // 切肉刀：烹饪（移除 2 张牌，回复 8 点生命）
+    if (run.relics.includes('MEAT_CLEAVER') && run.deck.filter(d => CARDS[d.id]).length >= 2) {
+      choices.push({
+        label: '烹饪 · 移除2张牌并回复8点生命', desc: '切肉刀',
+        act: async () => { await this.promptRemoveCard(); await this.promptRemoveCard(); run.heal(8); },
+      });
+    }
+    // 南瓜蜡烛：重新点燃（+5 场战斗的能量）
+    if (run.relics.includes('PUMPKIN_CANDLE') && (run.relicData.pumpkinCandle || 0) <= 0) {
+      choices.push({
+        label: '点燃 · 南瓜蜡烛重新燃起', desc: '接下来 5 场战斗每回合 +1 能量',
+        act: () => { run.relicData.pumpkinCandle = 5; },
+      });
+    }
+    // 佩尔的增生组织：克隆附魔的牌可以在休息处复制
+    const cloneable = run.deck.filter(d => d.enchant === 'CLONE');
+    if (cloneable.length) {
+      choices.push({
+        label: '克隆 · 复制一张附魔牌', desc: `牌组里有 ${cloneable.length} 张「克隆」牌`,
+        act: async () => {
+          const cards = cloneable.map(d => makeCard(d.id, d.upgraded));
+          const picked = await this.requestSelection({ pool: cards, count: 1, prompt: '选择要复制的牌' });
+          if (!picked.length) return;
+          const src = cloneable[cards.indexOf(picked[0])];
+          if (!src) return;
+          const entry = run.addCard(src.id, src.upgraded);
+          if (src.enchant) entry.enchant = src.enchant;
+        },
+      });
+    }
     if (canGirya) choices.push({ label: '锻炼 · 获得 1 点力量', desc: `壶铃（${run.giryaCount || 0}/3）`, act: () => { run.giryaCount = (run.giryaCount || 0) + 1; run.addRelic('GIRYA'); this.run.strengthBonus = (this.run.strengthBonus || 0) + 1; run.relics = run.relics.filter(r => r !== 'GIRYA'); run.relics.push('GIRYA'); run.giryaStrength = (run.giryaStrength || 0) + 1; } });
+    // 多尼斯异鸟蛋：休息处可以孵化（对照 ByrdonisEgg.ModifyAvailableRestSiteDecisions）
+    if (run.deck.some(d => d.id === 'BYRDONIS_EGG') && !run.relics.includes('BYRDPIP')) {
+      choices.push({
+        label: '孵化 · 多尼斯异鸟蛋',
+        desc: '蛋孵化成「异鸟扑击」，并获得「异鸟宝宝」',
+        act: () => { run.addRelic('BYRDPIP'); this.toast('异鸟宝宝加入了队伍'); },
+      });
+    }
 
     this.setOverlay(`<div class="sheet">
       <div class="sheet-title">休息处</div>
@@ -1201,6 +1787,16 @@ export class App {
     if (!this.shopStock) this.shopStock = this.run.makeShop();
     const s = this.shopStock;
     const run = this.run;
+    // 领主阳伞：进店时立刻免费拿走所有商品（对照 LordsParasol.AfterRoomEntered）
+    if (run.relicData.lordsParasol && !s.parasolDone) {
+      s.parasolDone = true;
+      const got = [];
+      for (const c of s.cards) if (!c.sold) { run.addCard(c.id); c.sold = true; got.push(CARDS[c.id].name); }
+      for (const r of s.relics) if (!r.sold) { run.addRelic(r.id); r.sold = true; got.push(RELICS[r.id].name); }
+      for (const p of s.potions) if (!p.sold && run.addPotion(p.id)) { p.sold = true; got.push(POTIONS[p.id].name); }
+      if (got.length) this.toast(`领主阳伞：免费收下 ${got.length} 件商品`, 2400);
+      this.save();
+    }
     const potionFull = !run.potions.includes(null);
 
     // 一行商品：图标 + 名称/摘要 + 价格/状态。点整行先看详情，再确认购买
@@ -1223,7 +1819,7 @@ export class App {
     const cardRow = (item, i) => {
       const def = CARDS[item.id];
       const card = makeCard(item.id);
-      const rarity = { common: '普通', uncommon: '罕见', rare: '稀有', basic: '初始' }[def.rarity] || '';
+      const rarity = { common: '普通', uncommon: '罕见', rare: '稀有', basic: '初始', event: '事件', quest: '任务' }[def.rarity] || '';
       const type = { attack: '攻击', skill: '技能', power: '能力' }[def.type] || '';
       return row({
         attr: 'data-buy-card', i,
@@ -1261,7 +1857,7 @@ export class App {
         <button class="btn small" id="leave-shop" style="padding:7px 14px">离开商店</button>
       </div>
       <div class="sheet-title">商店</div>
-      <div class="sheet-sub">点任意商品先看效果，确认后再付钱。</div>
+      <div class="sheet-sub">点任意商品先看效果，确认后再付钱；长按卡牌可看完整说明与升级效果。</div>
       <div class="sheet-body">
         <div class="sheet-sub">卡牌</div>${s.cards.map(cardRow).join('')}
         <div class="sheet-sub" style="margin-top:12px">遗物</div>${s.relics.map(relicRow).join('')}
@@ -1302,11 +1898,11 @@ export class App {
     let title = '', tag = '', body = '';
     if (kind === 'card') {
       const def = CARDS[item.id];
-      const rarity = { common: '普通', uncommon: '罕见', rare: '稀有' }[def.rarity] || '';
+      const rarity = { common: '普通', uncommon: '罕见', rare: '稀有', event: '事件', quest: '任务' }[def.rarity] || '';
       const type = { attack: '攻击', skill: '技能', power: '能力' }[def.type] || '';
       title = def.name;
       tag = [rarity, type].filter(Boolean).join(' · ');
-      body = `<div class="shop-preview">${cardHTML(makeCard(item.id), {})}</div>
+      body = `<div class="shop-preview">${cardHTML(makeCard(item.id), { link: true })}</div>
         <div class="shop-preview-note">买下后直接加入牌组，永久保留</div>`;
     } else if (kind === 'relic') {
       const r = RELICS[item.id];
@@ -1366,6 +1962,7 @@ export class App {
     if (kind === 'potion' && !run.potions.includes(null)) { this.toast('药水栏位已满'); return false; }
     if (run.gold < item.price) { this.toast('金币不足'); return false; }
     run.gainGold(-item.price);
+    run.relicData.mawBankSpent = true;
     item.sold = true;
     if (kind === 'card') { run.addCard(item.id); this.toast(`获得 ${CARDS[item.id].name}`); }
     else if (kind === 'relic') { run.addRelic(item.id); this.toast(`获得 ${RELICS[item.id].name}`); }
@@ -1379,7 +1976,7 @@ export class App {
     const run = this.run;
     if (!s || s.removed) return;
     if (run.gold < s.removePrice) { this.toast('金币不足'); return; }
-    const picked = await this.requestSelection({ pool: run.deck.map(d => makeCard(d.id, d.upgraded)).map((c, i) => ({ ...c, _entry: run.deck[i] })), count: 1, prompt: '选择要移除的牌' });
+    const picked = await this.requestSelection({ pool: run.deck.map(d => makeCard(d.id, d.upgraded)).map((c, i) => ({ ...c, _entry: run.deck[i] })), count: 1, prompt: '选择要移除的牌', confirm: '移除' });
     if (!picked.length) return;
     run.gainGold(-s.removePrice);
     run.removeCard(picked[0]._entry);
@@ -1416,34 +2013,68 @@ export class App {
   /* ================= 事件 ================= */
   showEvent() {
     const run = this.run;
-    if (!run.eventPool.length) run.eventPool = Object.keys(EVENTS).slice();
-    const id = run.eventPool.shift();
+    // 事件池里可能堆着条件不满足（钱不够 / 没有可附魔的牌…）的条目，先跳过它们
+    let id = null;
+    while (run.eventPool.length) {
+      const cand = run.eventPool.shift();
+      const def = EVENTS[cand];
+      if (!def) continue;
+      if (def.allowed && !def.allowed(this)) continue;
+      id = cand;
+      break;
+    }
+    if (!id) id = Object.keys(EVENTS)[0];
+    this.renderEvent(id, 'INITIAL');
+  }
+
+  /** 渲染事件的一段。多段事件（挖花、审判、打造时间…）用 page 切换 */
+  renderEvent(id, page = 'INITIAL') {
     const ev = EVENTS[id];
-    const choices = ev.choices(this);
+    if (!ev) { this.showMap(); return; }
+    if (page === 'INITIAL') this._evs = {};
+    const pg = page === 'INITIAL' ? { text: ev.text, choices: ev.choices } : ev.pages?.[page];
+    if (!pg) { this.showMap(); return; }
+    this._eventFinished = false;
+    const choices = pg.choices(this);
+    const text = typeof pg.text === 'function' ? pg.text(this) : (pg.text || '');
 
     this.setOverlay(`<div class="sheet">
       <div class="event-art">${esc(ev.title.slice(0, 1))}</div>
       <div class="sheet-title">${esc(ev.title)}</div>
-      <div class="event-text">${esc(ev.text)}</div>
+      <div class="event-text">${esc(text)}</div>
       <div class="sheet-body"><div class="choices" id="event-list"></div></div>
     </div>`);
     const list = $('#event-list');
     choices.forEach((ch) => {
       const b = document.createElement('button');
-      b.className = 'choice';
+      b.className = 'choice' + (ch.disabled ? ' sold' : '');
       b.innerHTML = `<div class="t">${esc(ch.label)}</div>${ch.desc ? `<div class="d">${esc(ch.desc)}</div>` : ''}`;
       b.onclick = async () => {
+        if (ch.disabled) return;
+        const ok = await this.askConfirm({
+          title: `确认选择「${ch.label}」？`,
+          body: `${ch.desc ? esc(ch.desc) + '<br>' : ''}事件里的选择通常无法反悔。`,
+          okText: '确认选择',
+          cancelText: '再想想',
+        });
+        if (!ok) return;
         this.clearOverlay();
         await ch.apply();
-        this.save();
-        this.showMap();
+        // 跳到别的一段 / 进入战斗的选项自己接管后续流程；其余选项到此结束
+        if (!ch.page && !ch.combat && !this._eventFinished) this.eventDone();
       };
       list.appendChild(b);
     });
   }
 
+  /** 事件里跳到另一段（同一次事件，不消耗事件池） */
+  eventPage(id, page) { this.renderEvent(id, page); }
+
+  /** 事件结束后回到地图 */
+  eventDone() { this._eventFinished = true; this.save(); this.showMap(); }
+
   /* ================= 选择卡牌 ================= */
-  requestSelection({ pool, count = 1, prompt = '选择卡牌', optional = false, multi = false }) {
+  requestSelection({ pool, count = 1, prompt = '选择卡牌', optional = false, multi = false, confirm = '' }) {
     // 战斗打完了就不用再问了（否则面板会盖住战利品界面，流程走不下去）。
     // 注意：商店/事件的删牌、升级也会走这里，那时 combat 是 null，不能被拦。
     if (this.combat && this.combat.finished) return Promise.resolve([]);
@@ -1474,12 +2105,24 @@ export class App {
         grid.innerHTML = cards.map(c => cardHTML(c, { selected: selected.some(s => s.uid === c.uid) })).join('');
       };
       paint();
-      grid.onclick = (e) => {
+      grid.onclick = async (e) => {
         const el = e.target.closest('[data-uid]');
         if (!el) return;
         const card = cards.find(c => c.uid === el.dataset.uid);
         if (!card) return;
-        if (!multiMode) { this.clearOverlay(); settle([card]); return; }
+        if (!multiMode) {
+          // confirm 只在「点一下就直接生效」的场景传入（商店删牌），战斗中选牌不加，免得拖节奏
+          if (confirm) {
+            const ok = await this.askConfirm({
+              title: `确认${confirm}「${card.name}」？`,
+              sub: '这个操作会直接改动你的牌组，不能撤销。',
+              okText: confirm,
+              cancelText: '再想想',
+            });
+            if (!ok || !$('#sel-grid')) return;
+          }
+          this.clearOverlay(); settle([card]); return;
+        }
         const i = selected.findIndex(s => s.uid === card.uid);
         if (i >= 0) selected.splice(i, 1);
         else if (selected.length < count) selected.push(card);
@@ -1495,6 +2138,24 @@ export class App {
   damage(n) { this.run.damage(n); this.toast(`失去 ${n} 点生命`); }
   gainGold(n) { this.run.gainGold(n); this.toast(n >= 0 ? `获得 ${n} 金币` : `失去 ${-n} 金币`); }
   gainMaxHp(n) { this.run.gainMaxHp(n); this.toast(n >= 0 ? `最大生命 +${n}` : `最大生命 ${n}`); }
+  loseMaxHp(n) { this.run.gainMaxHp(-n); this.toast(`最大生命 -${n}`); }
+  addPotionById(id) {
+    if (this.run.addPotion(id)) this.toast(`获得 ${POTIONS[id].name}`);
+    else this.toast('药水栏位已满');
+  }
+  addRelicOfTier(tier) {
+    const id = this.run.rollRelic(tier);
+    if (id) { this.run.addRelic(id); this.toast(`获得 ${RELICS[id].name}`); }
+    return id;
+  }
+  /** 事件里「给一张牌附魔」，按类型过滤（'attack' / 'skill' / 'power' / 'basic'） */
+  enchantOfType(kind, type) {
+    return this.enchantChoice(kind, (def) => {
+      if (!def) return false;
+      if (type === 'basic') return def.rarity === 'basic' && (def.tags || []).some((t) => t === 'strike' || t === 'defend');
+      return def.type === type;
+    });
+  }
   addPotionRandom() {
     const id = this.run.rollPotion();
     if (id && this.run.addPotion(id)) this.toast(`获得 ${POTIONS[id].name}`);
@@ -1517,6 +2178,687 @@ export class App {
   }
   removeCardPrompt() { return this.promptRemoveCard(); }
 
+  /* ================= 事件专用操作 ================= */
+  addCardById(id, upgraded = false) {
+    this.run.addCard(id, upgraded);
+    this.toast(`获得 ${CARDS[id].name}`);
+  }
+  addRelicById(id) {
+    this.run.addRelic(id);
+    this.toast(`获得 ${RELICS[id].name}`);
+  }
+  async removeCards(n = 1) {
+    for (let i = 0; i < n; i++) await this.promptRemoveCard();
+  }
+  upgradablePool() {
+    return this.run.deck.filter(d => {
+      const def = CARDS[d.id];
+      return !d.upgraded && def && def.rarity !== 'status' && def.rarity !== 'curse' && def.rarity !== 'quest';
+    });
+  }
+  upgradeRandomN(n) {
+    const pool = this.upgradablePool();
+    let done = 0;
+    for (let i = 0; i < n && pool.length; i++) {
+      const pick = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+      pick.upgraded = true;
+      done++;
+      this.toast(`升级了 ${CARDS[pick.id].name}`);
+    }
+    if (!done) this.toast('没有可升级的牌');
+  }
+  downgradeRandomN(n) {
+    const pool = this.run.deck.filter(d => d.upgraded);
+    for (let i = 0; i < n && pool.length; i++) {
+      const pick = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+      pick.upgraded = false;
+    }
+  }
+  duplicateDeck() {
+    const copies = this.run.deck.map(d => ({ ...d, uid: 'd' + Math.random().toString(36).slice(2, 9) }));
+    this.run.deck.push(...copies);
+    this.toast(`复制了 ${copies.length} 张牌`);
+  }
+  transformRandomN(n) {
+    const pool = this.run.deck.filter(d => {
+      const def = CARDS[d.id];
+      return def && !['status', 'curse', 'quest'].includes(def.rarity);
+    });
+    for (let i = 0; i < n && pool.length; i++) {
+      const pick = pool.splice(Math.floor(Math.random() * pool.length), 1)[0];
+      const ids = this.run.rollCardReward(1);
+      if (!ids.length) break;
+      pick.id = ids[0];
+      pick.upgraded = false;
+    }
+  }
+  /** 这张牌能不能被「变化」（对照 CardModel.IsTransformable：任务牌与非永恒牌之外都行） */
+  isTransformable(id) {
+    const def = CARDS[id];
+    return !!def && def.type !== 'quest' && !def.eternal;
+  }
+  /** 从牌组里挑 n 张牌变化成随机牌（混沌芳香 / 变形灵林谷） */
+  async transformChoice(n = 1) {
+    for (let i = 0; i < n; i++) {
+      const pool = this.run.deck.filter(d => this.isTransformable(d.id));
+      if (!pool.length) { this.toast('没有可以变化的牌'); return; }
+      const cards = pool.map(d => makeCard(d.id, d.upgraded));
+      const picked = await this.requestSelection({ pool: cards, count: 1, prompt: '选择要变化的牌' });
+      if (!picked.length) return;
+      const entry = pool[cards.indexOf(picked[0])];
+      if (!entry) return;
+      const ids = this.run.rollCardReward(1);
+      if (!ids.length) return;
+      this.run.transformEntry(entry, ids[0], false);
+      this.toast(`变化为 ${CARDS[ids[0]].name}`);
+    }
+  }
+  /** 是否已经有「事件宠物」（异鸟宝宝 / 佩尔的士兵，或牌组里还揣着蛋） */
+  hasEventPet() {
+    if (this.run.relics.includes('BYRDPIP') || this.run.relics.includes('PAELS_LEGION')) return true;
+    return this.run.deck.some(d => d.id === 'BYRDONIS_EGG');
+  }
+  async pickCards(ids, prompt, opts = {}) {
+    const picked = await this.requestSelection({
+      pool: ids.map(id => makeCard(id)), count: 1, prompt, optional: !!opts.optional,
+    });
+    return picked[0] || null;
+  }
+  killPlayer() {
+    this._eventFinished = true;
+    this.run.hp = 0;
+    this.showGameOver(false);
+  }
+  /** 事件里发起的战斗：encId 只是标识，enemyIds 决定出场敌人；opts 可带 slots / repeat */
+  eventCombat(encId, enemyIds, after, opts = {}) {
+    const enc = { id: encId, units: enemyIds.map(id => [id]), ...opts };
+    this.startCombat('normal', null, enc, after);
+  }
+
+  /* ---- 事件里更细的操作 ---- */
+  /** 熔合者：移除 2 张基础打击/防御，换成对应的究极牌 */
+  combineBasics(tag, newId) {
+    const pool = this.run.deck.filter(d => {
+      const def = CARDS[d.id];
+      return def && def.rarity === 'basic' && (def.tags || []).includes(tag);
+    });
+    pool.slice(0, 2).forEach(d => this.run.removeCard(d));
+    this.run.addCard(newId);
+    this.toast(`融合完成：获得 ${CARDS[newId].name}`);
+  }
+  /** 色彩哲学家：三名其他角色的石像（颜色顺序同原作，随机去掉一人） */
+  philosopherChoices() {
+    const order = ['NECROBINDER', 'IRONCLAD', 'REGENT', 'SILENT', 'DEFECT'];
+    const colorName = { NECROBINDER: '粉色', IRONCLAD: '红色', REGENT: '橙色', SILENT: '绿色', DEFECT: '蓝色' };
+    const cands = order.filter(id => id !== this.run.charId);
+    while (cands.length > 3) cands.splice(this.run.rng.int(cands.length), 1);
+    return cands.map(id => ({
+      label: colorName[id],
+      desc: `获得3张${CHARACTER_BY_ID[id]?.name || id}的卡牌（普通/罕见/稀有各三选一）`,
+      apply: async () => { await this.pickCharacterCards(id); this.eventDone(); },
+    }));
+  }
+  async pickCharacterCards(charId) {
+    const name = { common: '普通', uncommon: '罕见', rare: '稀有', event: '事件', quest: '任务' };
+    for (const rarity of ['common', 'uncommon', 'rare']) {
+      const ids = Object.values(CARDS)
+        .filter(d => d.rarity === rarity && d.char === charId && d.type !== 'status' && d.type !== 'curse')
+        .map(d => d.id);
+      if (!ids.length) continue;
+      const picks = this.run.rng.pickMany(ids, 3);
+      const picked = await this.pickCards(picks, `选择一张${name[rarity]}牌`);
+      if (picked) this.run.addCard(picked.id);
+    }
+  }
+  /** 附魔：只改牌组条目的标记，战斗开始时套到卡牌实例上 */
+  async enchantChoice(kind, filter = null) {
+    let pool = this.run.deck.slice();
+    // 兼容旧写法：第二个参数为 true 表示「只要带消耗的牌」
+    if (filter === true) pool = pool.filter(d => CARDS[d.id]?.exhaustOnPlay);
+    else if (typeof filter === 'function') pool = pool.filter(d => filter(CARDS[d.id]));
+    if (!pool.length) { this.toast('没有可以附魔的牌'); return; }
+    const cards = pool.map(d => makeCard(d.id, d.upgraded));
+    const picked = await this.requestSelection({ pool: cards, count: 1, prompt: '选择要附魔的牌' });
+    if (!picked.length) return;
+    const entry = pool[cards.indexOf(picked[0])];
+    if (!entry) return;
+    entry.enchant = kind;
+    this.toast(`附魔完成：${ENCHANT_NAMES[kind] || kind}`);
+  }
+  /** 选牌升级（不传张数时升 1 张） */
+  async upgradeChoice(n = 1) {
+    for (let i = 0; i < n; i++) {
+      const pool = this.upgradablePool();
+      if (!pool.length) { this.toast('没有可升级的牌'); return; }
+      const cards = pool.map(d => makeCard(d.id, d.upgraded));
+      const picked = await this.requestSelection({ pool: cards, count: 1, prompt: '选择要升级的牌' });
+      if (!picked.length) return;
+      const entry = pool[cards.indexOf(picked[0])];
+      if (entry) entry.upgraded = true;
+    }
+  }
+  gainRandomOfType(type) {
+    const id = CARDS && Object.values(CARDS)
+      .filter(d => d.type === type && !['status', 'curse', 'event', 'quest', 'token', 'basic'].includes(d.rarity))
+      .filter(d => !d.char || d.char === 'NEUTRAL' || d.char === this.run.charId)
+      .map(d => d.id);
+    if (!id.length) return;
+    const pick = this.run.rng.pick(id);
+    this.run.addCard(pick);
+    this.toast(`获得 ${CARDS[pick].name}`);
+  }
+  gainRandomZeroCost() {
+    const ids = Object.values(CARDS)
+      .filter(d => d.cost === 0 && !['status', 'curse', 'event', 'quest', 'token', 'basic'].includes(d.rarity))
+      .filter(d => !d.char || d.char === 'NEUTRAL' || d.char === this.run.charId)
+      .map(d => d.id);
+    if (!ids.length) return;
+    const pick = this.run.rng.pick(ids);
+    this.run.addCard(pick);
+    this.toast(`获得 ${CARDS[pick].name}`);
+  }
+  /** 一次三选一卡牌奖励（事件用） */
+  async cardReward() {
+    const ids = this.run.rollCardReward(3);
+    if (!ids.length) return;
+    const entries = this.run.rewardMods(ids);
+    const picked = await this.pickCards(ids, '选择一张牌加入牌组');
+    if (!picked) return;
+    const opt = entries.find((o) => o.id === picked.id) || { id: picked.id };
+    const entry = this.run.addCard(opt.id, !!opt.upgraded);
+    if (opt.enchant && entry) entry.enchant = opt.enchant;
+  }
+  /** 审判：随机一个案子 */
+  trialCase() { return ['MERCHANT', 'NOBLE', 'NONDESCRIPT'][this.run.rng.int(3)]; }
+  /** 打造时间：类型三选二 */
+  tinkerTypes() {
+    const types = [['ATTACK', '攻击牌'], ['SKILL', '技能牌'], ['POWER', '能力牌']];
+    const picks = this.run.rng.pickMany(types, 2);
+    return picks.map(([key, label]) => ({
+      label,
+      desc: '看看这个方向能做出什么',
+      page: 'RIDER',
+      apply: () => { this._tinkerType = key; this.eventPage('TINKER_TIME', 'RIDER'); },
+    }));
+  }
+  /** 打造时间：词条三选二 */
+  tinkerRiders() {
+    const map = {
+      ATTACK: [['SAPPING', '虚弱 + 易伤'], ['VIOLENCE', '攻击 3 次'], ['CHOKING', '紧勒 6']],
+      SKILL: [['ENERGIZED', '获得 2 能量'], ['WISDOM', '抽 3 张牌'], ['CHAOS', '随机免费牌']],
+      POWER: [['EXPERTISE', '力量 +2 / 敏捷 +2'], ['CURIOUS', '能力牌耗能 -1'], ['IMPROVEMENT', '战斗结束升级一张牌']],
+    };
+    const picks = this.run.rng.pickMany(map[this._tinkerType] || map.ATTACK, 2);
+    return picks.map(([key, label]) => ({
+      label,
+      desc: `「疯狂科学」（${label}）`,
+      apply: () => {
+        this.addCardById(`MAD_SCIENCE_${this._tinkerType}_${key}`);
+        this.eventDone();
+      },
+    }));
+  }
+
+  /* ================= 共享 / 海底事件用到的操作 ================= */
+  /** 单次事件内的临时状态（切到 INITIAL 时由 renderEvent 清空） */
+  evState(init) {
+    if (!this._evs) this._evs = {};
+    if (init) for (const k of Object.keys(init)) if (!(k in this._evs)) this._evs[k] = init[k];
+    return this._evs;
+  }
+  removeFirstById(id) {
+    const i = this.run.deck.findIndex(d => d.id === id);
+    if (i >= 0) this.run.deck.splice(i, 1);
+  }
+  /** 从 n 张随机牌里挑 pick 张加入牌组（脑蛭的「分享知识」） */
+  async randomCardChoices(offer = 5, pick = 1) {
+    const ids = this.run.rollCardReward(offer);
+    if (!ids.length) return;
+    const cards = ids.map(id => makeCard(id));
+    const picked = await this.requestSelection({ pool: cards, count: pick, prompt: '选择一张牌' });
+    for (const c of picked) this.run.addCard(c.id);
+  }
+  /** 无色牌奖励：本作已实装的无色牌即「被遗忘的旧日」这一组 */
+  async colorlessCardReward() {
+    const picks = this.run.rng.pickMany(FORGOTTEN_CARDS, 3);
+    const cards = picks.map(id => makeCard(id));
+    const picked = await this.requestSelection({ pool: cards, count: 1, prompt: '选择一张无色牌' });
+    if (picked.length) this.run.addCard(picked[0].id);
+  }
+  addPotionOfTier(tier) {
+    const ids = Object.entries(POTIONS)
+      .filter(([id, p]) => p.rarity === tier && this.run.potionAllowed(id))
+      .map(([id]) => id);
+    if (ids.length) this.addPotionById(this.run.rng.pick(ids));
+  }
+  /** 从某稀有度里抽 offer 张，让玩家挑 count 张加入牌组 */
+  async pickRarityCards(rarity, count, offer) {
+    const pool = this.run.poolByRarity(rarity);
+    if (!pool.length) return;
+    const picks = this.run.rng.pickMany(pool, Math.min(offer, pool.length));
+    const cards = picks.map(id => makeCard(id));
+    const names = { common: '普通', uncommon: '罕见', rare: '稀有' };
+    const picked = await this.requestSelection({ pool: cards, count, prompt: `选择${count}张${names[rarity] || ''}牌` });
+    for (const c of picked) this.run.addCard(c.id);
+  }
+  /** 变化一张指定的牌 */
+  async transformChoice() {
+    const pool = this.run.deck.filter(d => {
+      const def = CARDS[d.id];
+      return def && !['status', 'curse', 'quest'].includes(def.rarity);
+    });
+    if (!pool.length) { this.toast('没有可以变化的牌'); return; }
+    const cards = pool.map(d => makeCard(d.id, d.upgraded));
+    const picked = await this.requestSelection({ pool: cards, count: 1, prompt: '选择要变化的牌' });
+    if (!picked.length) return;
+    const entry = pool[cards.indexOf(picked[0])];
+    if (!entry) return;
+    const ids = this.run.rollCardReward(1);
+    if (!ids.length) return;
+    entry.id = ids[0];
+    entry.upgraded = false;
+    this.toast(`变化成了 ${CARDS[ids[0]].name}`);
+  }
+  /** 给一张「指定稀有度 + 指定类型」的升级牌（药水的未来？） */
+  async giveUpgradedCardOf(rarity, type) {
+    const pool = Object.values(CARDS)
+      .filter(d => d && d.rarity === rarity && d.type === type)
+      .filter(d => !d.char || d.char === 'NEUTRAL' || d.char === this.run.charId)
+      .map(d => d.id);
+    if (!pool.length) return;
+    const picks = this.run.rng.pickMany(pool, Math.min(3, pool.length));
+    const cards = picks.map(id => makeCard(id, true));
+    const picked = await this.requestSelection({ pool: cards, count: 1, prompt: '选择一张牌' });
+    if (picked.length) this.run.addCard(picked[0].id, true);
+  }
+
+  /* ---- 深渊浴场 ---- */
+  bathImmerse() {
+    const st = this.evState();
+    this.run.gainMaxHp(2);
+    this.run.damage(st.damage);
+    st.lingered++;
+    st.damage++;
+    this.save();
+    this.eventPage('ABYSSAL_BATHS', 'IMMERSE');
+  }
+
+  /* ---- 无尽传送带（EndlessConveyor.RollDish / ResolveDish） ---- */
+  rollConveyorDish() {
+    const st = this.evState();
+    st.grabs = (st.grabs || 0) + 1;
+    if (st.grabs % 5 === 0) { st.dish = 'SEAPUNK_SALAD'; return st.dish; }
+    const dishes = [
+      { id: 'CAVIAR', w: 6 },
+      { id: 'SPICY_SNAPPY', w: 3 },
+      { id: 'JELLY_LIVER', w: 3 },
+      { id: 'FRIED_EEL', w: 3 },
+    ];
+    if (this.run.potions.includes(null)) dishes.push({ id: 'SUSPICIOUS_CONDIMENT', w: 3 });
+    if (this.run.hp !== this.run.maxHp) dishes.push({ id: 'CLAM_ROLL', w: 6 });
+    if (st.grabs > 1) dishes.push({ id: 'GOLDEN_FYSH', w: 1 });
+    const pool = dishes.filter(d => d.id !== st.lastDish);
+    const total = pool.reduce((s, d) => s + d.w, 0);
+    let r = this.run.rng.next() * total;
+    let picked = pool[pool.length - 1].id;
+    for (const d of pool) { r -= d.w; if (r < 0) { picked = d.id; break; } }
+    st.dish = picked;
+    st.lastDish = picked;
+    return picked;
+  }
+  conveyorChoices() {
+    const st = this.evState();
+    const dish = st.dish;
+    const cost = 40;
+    const titles = {
+      CAVIAR: '鱼子酱', CLAM_ROLL: '蚌肉卷', FRIED_EEL: '炸鳗鱼', GOLDEN_FYSH: '金色异鱼',
+      JELLY_LIVER: '水母肝', SEAPUNK_SALAD: '海洋混混沙拉', SPICY_SNAPPY: '香辣薄脆',
+      SUSPICIOUS_CONDIMENT: '可疑调味料',
+    };
+    const descs = {
+      CAVIAR: '支付40金币。获得4点最大生命。接着吃！',
+      CLAM_ROLL: '支付40金币。回复10点生命值。接着吃！',
+      FRIED_EEL: '支付40金币。将一张随机无色牌添加到你的牌组。接着吃！',
+      GOLDEN_FYSH: '幸运头奖！获得75金币。',
+      JELLY_LIVER: '支付40金币。变化一张牌。接着吃！',
+      SEAPUNK_SALAD: '支付40金币。将一张疯狂进食添加到你的牌组。接着吃！',
+      SPICY_SNAPPY: '支付40金币。随机升级一张牌。接着吃！',
+      SUSPICIOUS_CONDIMENT: '支付40金币。随机获得一瓶药水。接着吃！',
+    };
+    const out = [];
+    if (this.run.gold < cost && dish !== 'GOLDEN_FYSH') {
+      out.push({ label: '破产了', desc: '你还能吃得下更多，但是兜里没金币了。', apply: () => this.eventDone() });
+    } else {
+      out.push({
+        label: `从传送带上拿份${titles[dish] || ''}`,
+        desc: descs[dish] || '', page: 'GRAB',
+        apply: () => this.conveyorGrab(),
+      });
+    }
+    if (st.grabs) out.push({ label: '离开', desc: '', apply: () => this.eventDone() });
+    else out.push({ label: '观察主厨', desc: '从牌组中随机升级一张牌。', page: 'OBSERVE_CHEF', apply: () => this.eventPage('ENDLESS_CONVEYOR', 'OBSERVE_CHEF') });
+    return out;
+  }
+  async conveyorGrab() {
+    const st = this.evState();
+    const dish = st.dish;
+    st.lastDishShown = dish;
+    if (dish !== 'GOLDEN_FYSH') this.run.gainGold(-40);
+    switch (dish) {
+      case 'CAVIAR': this.run.gainMaxHp(4); break;
+      case 'SPICY_SNAPPY': this.upgradeRandomN(1); break;
+      case 'JELLY_LIVER': await this.transformChoice(); break;
+      case 'FRIED_EEL': await this.colorlessCardReward(); break;
+      case 'SEAPUNK_SALAD': this.addCardById('FEEDING_FRENZY'); break;
+      case 'SUSPICIOUS_CONDIMENT': this.addPotionRandom(); break;
+      case 'CLAM_ROLL': this.heal(10); break;
+      case 'GOLDEN_FYSH': this.gainGold(75); break;
+      default: break;
+    }
+    this.rollConveyorDish();
+    this.save();
+    this.eventPage('ENDLESS_CONVEYOR', 'GRAB');
+  }
+
+  /* ---- 滑脚木桥 ---- */
+  pickBridgeCard() {
+    const st = this.evState();
+    const seen = new Set(st.seen || []);
+    let cands = this.run.deck.filter(d => !seen.has(d.uid) && CARDS[d.id] && CARDS[d.id].rarity !== 'basic');
+    if (!cands.length) cands = this.run.deck.filter(d => !seen.has(d.uid));
+    if (!cands.length) { st.cardUid = null; return; }
+    const pick = this.run.rng.pick(cands);
+    st.cardUid = pick.uid;
+    st.seen = [...seen, pick.uid];
+  }
+  bridgeChoices() {
+    const st = this.evState();
+    const entry = this.run.deck.find(d => d.uid === st.cardUid);
+    const out = [];
+    if (entry) {
+      out.push({
+        label: '跨越', desc: `${CARDS[entry.id].name}将从你的牌组中被移除。`,
+        apply: () => { this.run.removeCard(entry); this.eventDone(); },
+      });
+    }
+    const loss = 3 + st.holds;
+    out.push({
+      label: '再撑一会', desc: `失去${loss}点生命。重新随机上方选项中的卡牌。`, page: 'BRIDGE',
+      apply: () => {
+        this.run.damage(loss);
+        st.holds++;
+        this.pickBridgeCard();
+        this.save();
+        this.eventPage('SLIPPERY_BRIDGE', 'BRIDGE');
+      },
+    });
+    return out;
+  }
+
+  /* ---- 长者兰伟德 / 遗物交换商 ---- */
+  ranwidChoices() {
+    const potions = this.run.potions.map((p, i) => ({ p, i })).filter(x => x.p);
+    const relics = this.run.relics.filter(id => RELIC_TRADABLE(id));
+    const potion = potions.length ? this.run.rng.pick(potions) : null;
+    const relic = relics.length ? this.run.rng.pick(relics) : null;
+    const out = [];
+    if (potion) {
+      out.push({
+        label: `给他${POTIONS[potion.p].name}`, desc: '获得一件随机遗物。',
+        apply: () => { this.run.removePotion(potion.i); this.addRelicRandom(); this.eventDone(); },
+      });
+    }
+    out.push({
+      label: '给他100金币', desc: '获得一件随机遗物。',
+      apply: () => { this.gainGold(-100); this.addRelicRandom(); this.eventDone(); },
+    });
+    if (relic) {
+      out.push({
+        label: `给他${RELICS[relic].name}`, desc: '获得2件随机遗物。',
+        apply: () => { this.run.removeRelic(relic); this.addRelicRandom(); this.addRelicRandom(); this.eventDone(); },
+      });
+    }
+    return out;
+  }
+  relicTraderChoices() {
+    const st = this.evState({ trades: null });
+    if (!st.trades) {
+      const owned = this.run.relics.filter(id => RELIC_TRADABLE(id));
+      const give = this.run.rng.pickMany(owned, Math.min(3, owned.length));
+      st.trades = give.map(id => ({ give: id, get: this.run.rollRelic() }));
+    }
+    const keys = ['拿上面这件', '拿中间这件', '拿下面这件'];
+    const out = st.trades.map((t, i) => ({
+      label: keys[i] || `交换 ${i + 1}`,
+      desc: `用${RELICS[t.give].name}换${t.get ? RELICS[t.get].name : '一件随机遗物'}。`,
+      apply: () => {
+        this.run.removeRelic(t.give);
+        if (t.get) this.addRelicById(t.get);
+        this.eventDone();
+      },
+    }));
+    if (!out.length) out.push({ label: '离开', desc: '「嘿嘿嘿……下次再来吶！」', apply: () => this.eventDone() });
+    return out;
+  }
+
+  /* ---- 商人？？？（假商人） ---- */
+  fakeMerchantChoices() {
+    const st = this.evState({ stock: null });
+    if (!st.stock) {
+      const pool = [
+        'FAKE_ANCHOR', 'FAKE_BLOOD_VIAL', 'FAKE_HAPPY_FLOWER', 'FAKE_LEES_WAFFLE',
+        'FAKE_MANGO', 'FAKE_ORICHALCUM', 'FAKE_SNECKO_EYE', 'FAKE_STRIKE_DUMMY',
+        'FAKE_VENERABLE_TEA_SET',
+      ];
+      st.stock = this.run.rng.pickMany(pool, 6)
+        .map(id => ({ id, price: Math.round(50 * (0.85 + this.run.rng.next() * 0.3)), bought: false }));
+    }
+    const out = st.stock.filter(s => !s.bought).map((s) => ({
+      label: RELICS[s.id].name,
+      desc: `支付${s.price}金币。${RELICS[s.id].desc}`,
+      disabled: this.run.gold < s.price,
+      apply: () => {
+        this.gainGold(-s.price);
+        s.bought = true;
+        this.addRelicById(s.id);
+        this.save();
+        this.eventPage('FAKE_MERCHANT', 'SHOP');
+      },
+    }));
+    out.push({ label: '离开', desc: '「那就下次再聊，孩子。」', apply: () => this.eventDone() });
+    return out;
+  }
+
+  /* ---- 药水的未来？ ---- */
+  potionFusionChoices() {
+    const st = this.evState({ list: null });
+    if (!st.list) {
+      st.list = this.run.potions
+        .map((p, i) => ({ p, i }))
+        .filter(x => x.p)
+        .map(({ p, i }) => {
+          const pr = POTIONS[p].rarity;
+          const cardRarity = pr === 'uncommon' ? 'uncommon' : pr === 'rare' ? 'rare' : 'common';
+          const types = (pr === 'common' || pr === 'event')
+            ? ['attack', 'skill'] : ['attack', 'skill', 'power'];
+          return { i, potion: p, cardRarity, type: this.run.rng.pick(types) };
+        });
+    }
+    const rn = { common: '普通', uncommon: '罕见', rare: '稀有' };
+    const tn = { attack: '攻击', skill: '技能', power: '能力' };
+    const opts = st.list.slice(0, 3).map(t => ({
+      label: `放入${rn[t.cardRarity]}药水`,
+      desc: `失去${POTIONS[t.potion].name}。获得一张升级过的${rn[t.cardRarity]}${tn[t.type]}牌。`,
+      apply: async () => {
+        this.run.removePotion(t.i);
+        await this.giveUpgradedCardOf(t.cardRarity, t.type);
+        this.eventDone();
+      },
+    }));
+    if (!opts.length) opts.push({ label: '离开', desc: '这机器似乎需要药水才能运作。', apply: () => this.eventDone() });
+    return opts;
+  }
+
+  /* ---- 水晶球占卜小游戏（CrystalSphereMinigame 的移植） ---- */
+  sphereBegin(divinations) {
+    const W = 11;
+    const hidden = Array.from({ length: W }, () => new Array(W).fill(true));
+    const occ = Array.from({ length: W }, () => new Array(W).fill(null));
+    const rng = this.run.rng;
+    // 四角两次横竖扩散后预先揭开（对照源码构造函数里的 corners 展开）
+    let corners = [[0, 0], [10, 0], [10, 10], [0, 10]];
+    for (let i = 0; i < 2; i++) {
+      const next = [];
+      for (const [x, y] of corners) {
+        if (x > 0) next.push([x - 1, y]);
+        if (x < 10) next.push([x + 1, y]);
+        if (y > 0) next.push([x, y - 1]);
+        if (y < 10) next.push([x, y + 1]);
+      }
+      corners = corners.concat(next);
+    }
+    for (const [x, y] of corners) hidden[x][y] = false;
+
+    const items = [];
+    const mk = (kind, extra = {}) => {
+      const size = kind === 'RELIC' ? [4, 4]
+        : (kind === 'POTION' && extra.potionRarity !== 'rare') ? [1, 3]
+          : kind === 'GOLD' ? [extra.big ? 2 : 1, 1] : [2, 2];
+      return { kind, width: size[0], height: size[1], revealed: false, ...extra };
+    };
+    const batch = [
+      mk('RELIC'),
+      mk('POTION'), mk('POTION'), mk('POTION', { potionRarity: 'rare' }),
+      mk('CARD', { rarity: 'common' }), mk('CARD', { rarity: 'uncommon' }), mk('CARD', { rarity: 'rare' }),
+      mk('CURSE'),
+    ];
+    for (let i = 0; i < 5; i++) batch.push(mk('GOLD'));
+    for (let i = 0; i < 2; i++) batch.push(mk('GOLD', { big: true }));
+
+    for (const item of batch) {
+      items.push(item);
+      const cands = [];
+      for (let x = 0; x < W; x++) {
+        for (let y = 0; y < W; y++) {
+          if (x + item.width > W || y + item.height > W) continue;
+          let ok = true;
+          for (let dx = 0; dx < item.width && ok; dx++) {
+            for (let dy = 0; dy < item.height && ok; dy++) {
+              if (!hidden[x + dx][y + dy] || occ[x + dx][y + dy]) ok = false;
+            }
+          }
+          if (ok) cands.push([x, y]);
+        }
+      }
+      if (!cands.length) continue;
+      const [px, py] = rng.pick(cands);
+      item.pos = [px, py];
+      for (let dx = 0; dx < item.width; dx++) {
+        for (let dy = 0; dy < item.height; dy++) occ[px + dx][py + dy] = item;
+      }
+    }
+
+    this._sphere = { W, hidden, occ, items, divinations, revealed: [] };
+    this.renderSphere();
+  }
+
+  renderSphere() {
+    const sp = this._sphere;
+    if (!sp) { this.eventDone(); return; }
+    const label = { RELIC: '🏺', POTION: '🧪', CARD: '🃏', CURSE: '☠️', GOLD: '🪙' };
+    let cells = '';
+    for (let x = 0; x < sp.W; x++) {
+      for (let y = 0; y < sp.W; y++) {
+        const it = sp.occ[x][y];
+        const open = !sp.hidden[x][y];
+        const glyph = open && it ? label[it.kind] : (open ? '·' : '');
+        cells += `<button class="sphere-cell${open ? ' open' : ''}" data-x="${x}" data-y="${y}">${glyph}</button>`;
+      }
+    }
+    this.setOverlay(`<div class="sheet">
+      <div class="sheet-title">水晶球</div>
+      <div class="sheet-sub">还剩下 ${sp.divinations} 次占卜</div>
+      <div class="event-text">通过揭开图块来揭幕你的未来！\n选择小幅占卜或大幅占卜，揭开水晶球内的图块。\n一旦有物品被揭示，你就将在本次服务时段结束时获得它…\n但要小心，揭开某些物品可能会非常危险！</div>
+      <div class="sheet-body"><div class="sphere-grid" id="sphere-grid">${cells}</div></div>
+      <div class="row" style="gap:8px">
+        <button class="btn" id="sphere-small">小幅占卜</button>
+        <button class="btn primary" id="sphere-big">大幅占卜</button>
+      </div>
+    </div>`);
+    const grid = $('#sphere-grid');
+    grid.onclick = (e) => {
+      const el = e.target.closest('[data-x]');
+      if (!el) return;
+      this._spherePick = [Number(el.dataset.x), Number(el.dataset.y)];
+      grid.querySelectorAll('.sphere-cell').forEach(c => c.classList.remove('picked'));
+      el.classList.add('picked');
+    };
+    $('#sphere-small').onclick = () => this.sphereReveal(false);
+    $('#sphere-big').onclick = () => this.sphereReveal(true);
+  }
+
+  async sphereReveal(big) {
+    const sp = this._sphere;
+    const pick = this._spherePick;
+    if (!sp || !pick) { this.toast('先在球面上点一个位置'); return; }
+    if (sp.divinations <= 0) return;
+    sp.divinations--;
+    const [x, y] = pick;
+    const cells = [[x, y]];
+    if (big) {
+      if (x > 0) cells.push([x - 1, y]);
+      if (x < 10) cells.push([x + 1, y]);
+      if (y > 0) cells.push([x, y - 1]);
+      if (y < 10) cells.push([x, y + 1]);
+      for (const dx of [-1, 1]) for (const dy of [-1, 1]) {
+        if (x + dx >= 0 && x + dx < 11 && y + dy >= 0 && y + dy < 11) cells.push([x + dx, y + dy]);
+      }
+    }
+    for (const [cx, cy] of cells) {
+      if (!sp.hidden[cx][cy]) continue;
+      sp.hidden[cx][cy] = false;
+      const it = sp.occ[cx][cy];
+      if (!it || it.revealed) continue;
+      let fullyOpen = true;
+      for (let dx = 0; dx < it.width; dx++) {
+        for (let dy = 0; dy < it.height; dy++) {
+          if (sp.hidden[it.pos[0] + dx][it.pos[1] + dy]) fullyOpen = false;
+        }
+      }
+      if (!fullyOpen) continue;
+      it.revealed = true;
+      sp.revealed.push(it);
+      if (it.kind === 'CURSE') this.addCardById('DOUBT');
+    }
+    this._spherePick = null;
+    if (sp.divinations <= 0) { await this.sphereSettle(); return; }
+    this.renderSphere();
+  }
+
+  async sphereSettle() {
+    const sp = this._sphere;
+    this._sphere = null;
+    const items = sp ? sp.revealed : [];
+    // 结算顺序对照源码 RewardOrder：金币 → 药水 → 遗物 → 卡牌
+    const order = { GOLD: 1, POTION: 2, RELIC: 3, CARD: 5, CURSE: 9 };
+    items.sort((a, b) => (order[a.kind] || 9) - (order[b.kind] || 9));
+    const rewards = [];
+    for (const it of items) {
+      if (it.kind === 'GOLD') rewards.push({ kind: 'gold', amount: it.big ? 30 : 10 });
+      else if (it.kind === 'POTION') {
+        const id = this.run.rollPotion();
+        if (id) rewards.push({ kind: 'potion', id });
+      } else if (it.kind === 'RELIC') {
+        const id = this.run.rollRelic();
+        if (id) rewards.push({ kind: 'relic', id });
+      } else if (it.kind === 'CARD') {
+        rewards.push({ kind: 'cards', ids: this.run.rollCardReward(3, { rarity: it.rarity }) });
+      }
+    }
+    if (!rewards.length) { this.eventDone(); return; }
+    this.showRewards(rewards, () => this.eventDone());
+  }
+
   /* ================= 牌组操作弹窗 ================= */
   promptRemoveCard() {
     return new Promise((resolve) => {
@@ -1527,10 +2869,17 @@ export class App {
         <div class="sheet-body"><div class="reward-grid" id="rm-grid">${cards.map(c => cardHTML(c)).join('')}</div></div>
         <button class="btn" id="rm-cancel">取消</button>
       </div>`);
-      $('#rm-grid').onclick = (e) => {
+      $('#rm-grid').onclick = async (e) => {
         const el = e.target.closest('[data-uid]');
         if (!el) return;
         const idx = [...$('#rm-grid').children].indexOf(el);
+        const ok = await this.askConfirm({
+          title: `确认移除「${cards[idx].name}」？`,
+          sub: '这张牌会从牌组里永久删除，不能撤销。',
+          okText: '移除这张牌',
+          cancelText: '再想想',
+        });
+        if (!ok || !$('#rm-grid')) return;
         this.run.deck.splice(idx, 1);
         this.clearOverlay();
         resolve();
@@ -1549,10 +2898,17 @@ export class App {
         <div class="sheet-body"><div class="reward-grid" id="up-grid">${cards.map(c => cardHTML(c)).join('')}</div></div>
         <button class="btn" id="up-cancel">取消</button>
       </div>`);
-      $('#up-grid').onclick = (e) => {
+      $('#up-grid').onclick = async (e) => {
         const el = e.target.closest('[data-uid]');
         if (!el) return;
         const idx = [...$('#up-grid').children].indexOf(el);
+        const ok = await this.askConfirm({
+          title: `确认升级「${cards[idx].name}」？`,
+          sub: '升级机会用完就没了。',
+          okText: '升级这张牌',
+          cancelText: '再想想',
+        });
+        if (!ok || !$('#up-grid')) return;
         this.run.deck[upgradable[idx].i].upgraded = true;
         this.clearOverlay();
         this.toast('已升级');

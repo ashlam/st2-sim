@@ -1,12 +1,18 @@
+import { HIVE_ENEMIES, HIVE_ENCOUNTERS, HIVE_WEAK_COUNT } from './enemies-hive.js';
+import { GLORY_ENEMIES, GLORY_ENCOUNTERS, GLORY_WEAK_COUNT } from './enemies-glory.js';
+import { UNDERDOCK_ENEMIES, UNDERDOCK_ENCOUNTERS, UNDERDOCK_WEAK_COUNT } from './enemies-underdocks.js';
+
 /**
  * 第一幕（Overgrowth / 蔓生之地）敌人数据
  * 数值来自 sts2-sim 的 MonsterModel 移植；括号内为进阶 8/9 级的强化值。
  * intent: attack{dmg,times} | defend{block} | buff | debuff | status | sleep | stun
  */
-export const ENEMIES = {
+const ACT1_ENEMIES = {
   /* ---------- 普通 ---------- */
   CUBEX_CONSTRUCT: {
     name: '立柱构造体', icon: '🗿', hp: [65, 65], hpAsc: [70, 70],
+    // 登场即获得 13 点格挡与 1 层人工制品（CubexConstruct.AfterAddedToRoom）
+    onSpawn: (C, e) => { e.block += 13; e.powers.artifact = 1; },
     pattern: ['charge', 'blast', 'blast', 'expel', 'blast', 'blast', 'expel'],
     moves: {
       charge: { name: '蓄能', intent: { type: 'buff' }, run: async (C, e) => { await C.enemyPower(e, 'strength', 2); } },
@@ -186,6 +192,25 @@ export const ENEMIES = {
       distract: { name: '牵制', intent: { type: 'status' }, run: async (C, e) => { await C.addCard('DAZED', 'discard', false, 3); } },
     },
   },
+  // 只在「茂密的植被」事件里出场（DenseVegetationEventEncounter）：4 只，按 wriggler1..4 站位决定起手
+  WRIGGLER: {
+    name: '扭动虫', icon: '🐛', hp: [17, 21], hpAsc: [18, 22],
+    moves: {
+      bite: { name: '扭动打击', intent: { type: 'attack', dmg: 6, dmgAsc: 7 }, run: async (C, e) => { await C.enemyAttack(e, 6, 7); } },
+      wriggle: {
+        name: '寄生', intent: { type: 'buff' },
+        run: async (C, e) => { await C.addCard('INFECTION', 'discard'); await C.enemyPower(e, 'strength', 2); },
+      },
+    },
+    // 1/3 号位从啃咬起手、2/4 号位从寄生起手，之后两者交替
+    ai: (C, e) => {
+      if (!e.acted) {
+        e.acted = true;
+        return (e.slot === 'wriggler2' || e.slot === 'wriggler4') ? 'wriggle' : 'bite';
+      }
+      return e.moveKey === 'bite' ? 'wriggle' : 'bite';
+    },
+  },
 
   /* ---------- 精英 ---------- */
   BYGONE_EFFIGY: {
@@ -273,7 +298,7 @@ export const ENEMIES = {
 };
 
 /** 遭遇战：普通/精英/Boss 池（第一幕） */
-export const ENCOUNTERS = {
+const ACT1_ENCOUNTERS = {
   weak: [
     { id: 'SHRINKER_BEETLE', units: [['SHRINKER_BEETLE']] },
     { id: 'FUZZY_WURM', units: [['FUZZY_WURM_CRAWLER']] },
@@ -305,5 +330,39 @@ export const ENCOUNTERS = {
     { id: 'VANTOM', units: [['VANTOM']] },
   ],
 };
+
+/* ---------------- 按幕汇总 ---------------- */
+/** 全部敌人（合并时后写的覆盖同名的，各幕没有重名） */
+export const ENEMIES = { ...ACT1_ENEMIES, ...HIVE_ENEMIES, ...GLORY_ENEMIES, ...UNDERDOCK_ENEMIES };
+
+/** 各幕的遭遇池。key 是幕序号（1 = 密林，2 = 巢穴，3 = 荣耀） */
+export const ENCOUNTERS_BY_ACT = {
+  1: ACT1_ENCOUNTERS,
+  2: HIVE_ENCOUNTERS,
+  3: GLORY_ENCOUNTERS,
+};
+
+/**
+ * 第一幕的两个变体（对照 ActDefinition.GetRandomList：第一幕在 Overgrowth 与 Underdocks 之间随机）
+ * key 与 Run.act1 一致。
+ */
+export const ACT1_VARIANTS = {
+  OVERGROWTH: ACT1_ENCOUNTERS,
+  UNDERDOCK: UNDERDOCK_ENCOUNTERS,
+};
+
+/** 取某一幕的遭遇池；第一幕按变体区分 */
+export function encounterPool(act, variant) {
+  if (act === 1) return ACT1_VARIANTS[variant] || ACT1_VARIANTS.OVERGROWTH;
+  return ENCOUNTERS_BY_ACT[act] || ENCOUNTERS_BY_ACT[1];
+}
+
+/** 弱怪池场数（第一幕 3、第二/三幕 2，见 Overgrowth / Hive / Glory 的 NumberOfWeakEncounters） */
+export const WEAK_COUNTS = { 1: 3, 2: HIVE_WEAK_COUNT, 3: GLORY_WEAK_COUNT };
+
+export { UNDERDOCK_WEAK_COUNT };
+
+/** 兼容旧引用：默认第一幕 */
+export const ENCOUNTERS = ACT1_ENCOUNTERS;
 
 export const RAIDER_POOL = ['AXE_RUBY_RAIDER', 'ASSASSIN_RUBY_RAIDER', 'BRUTE_RUBY_RAIDER', 'CROSSBOW_RUBY_RAIDER', 'TRACKER_RUBY_RAIDER'];

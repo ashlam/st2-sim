@@ -13,6 +13,29 @@ import { NecroSystem } from './necro.js';
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+/**
+ * 附魔效果表（对照 sts2-sim 的 Models/Enchantments）
+ * dmg / dmgPct / block 只在打出这张牌时生效，replay 增加打出次数。
+ */
+export const ENCHANTS = {
+  SPIRAL: { name: '涡旋', replay: 1 },              // 额外打出一次
+  STEADY: { name: '稳定', retain: true },            // 保留
+  NIMBLE: { name: '灵巧', block: 2 },                // 格挡 +2
+  SHARP: { name: '锋利', dmg: 2 },                   // 伤害 +2
+  VIGOROUS: { name: '迅猛', dmg: 8 },                // 伤害 +8
+  CORRUPTED: { name: '腐化', dmgPct: 1.5, hpLoss: 2 }, // 伤害 ×1.5，打出时失去 2 生命
+  SWIFT: { name: '迅捷', draw: 2 },                  // 打出后抽 2 张
+  PERFECT_FIT: { name: '完美契合' },
+  SOULS_POWER: { name: '灵魂之力' },
+  /* ---- 先古遗物带来的附魔（对照 Models/Enchantments） ---- */
+  IMBUED: { name: '注能', autoPlay: true },          // 每场战斗开始时自动打出
+  GOOPY: { name: '黏糊', exhaust: true, goopy: true }, // 获得消耗；打出时格挡值永久 +1
+  CLONE: { name: '克隆', clone: true },              // 可在休息处复制
+  GLAM: { name: '华彩', replay: 1 },                 // 每场战斗重放一次
+  INSTINCT: { name: '本能', costDown: 1 },           // 费用 -1
+  TEZCATARAS_EMBER: { name: '特兹卡塔拉的余烬', costZero: true }, // 费用 0 且获得永恒
+};
+
 export class Combat {
   constructor(run, encounter, opts = {}) {
     this.run = run;
@@ -69,12 +92,28 @@ export class Combat {
       const card = newCard(c.id, c.upgraded);
       card.deckUid = c.uid;      // 让「遗传算法」这类牌能把成长写回牌组条目
       card.persist = c;
+      // 事件附魔：灵魂之力去掉「消耗」，完美契合让这张牌洗牌后永远最先抽到
+      if (c.enchant === 'SOULS_POWER') card._noExhaust = true;
+      if (c.enchant === 'PERFECT_FIT') card.perfectFit = true;
+      if (c.enchant && ENCHANTS[c.enchant]) {
+        card.enchant = { ...ENCHANTS[c.enchant] };
+        if (card.enchant.retain) card.retain = true;
+        if (card.enchant.exhaust) card._exhaust = true;
+        if (card.enchant.costDown) card.costReduction = (card.costReduction || 0) + card.enchant.costDown;
+        if (card.enchant.costZero) card.costReduction = 99;
+        if (card.enchant.goopy) card.goopyBonus = c.goopy || 0;
+      }
       return card;
     }));
     // 固有：开局必定在起手牌里 —— 放到抽牌堆顶部（pop 出来的最后一张）
     const innate = this.drawPile.filter(c => c.def.innate || (c.upgraded && c.def.innateOnUpgrade));
     if (innate.length) {
       this.drawPile = this.drawPile.filter(c => !innate.includes(c)).concat(innate);
+    }
+    // 完美契合：洗牌后总是排在最前面（同样放在堆顶）
+    const fitted = this.drawPile.filter(c => c.perfectFit);
+    if (fitted.length) {
+      this.drawPile = this.drawPile.filter(c => !c.perfectFit).concat(fitted);
     }
     this.hand = [];
     this.discardPile = [];
@@ -107,29 +146,69 @@ export class Combat {
         elite: !!def.elite, boss: !!def.boss, minion: !!def.minion,
         history: [], ...extra,
       };
+      if (def.onSpawn) def.onSpawn(this, e);
       this.enemies.push(e);
       return e;
     };
 
     let units = [];
-    for (const group of this.enc.units) {
-      for (const u of group) {
-        if (u === 'randomRaiders') {
-          const pool = ['AXE_RUBY_RAIDER', 'ASSASSIN_RUBY_RAIDER', 'BRUTE_RUBY_RAIDER', 'CROSSBOW_RUBY_RAIDER', 'TRACKER_RUBY_RAIDER'];
-          const picked = this.rng.pickMany(pool, this.enc.count || 3);
-          units.push(...picked);
-        } else units.push(u);
+    if (this.enc.build) {
+      // 第二、三幕的遭遇编组带随机性，交给数据层的 build(C) 决定出场名单
+      const built = this.enc.build(this);
+      built.forEach((it, i) => {
+        const o = typeof it === 'object' && it ? it : { id: it };
+        units.push({ ...o, slot: o.slot ?? (this.enc.slots || [])[i] ?? null });
+      });
+    } else {
+      for (const group of this.enc.units) {
+        for (const u of group) {
+          if (u === 'randomRaiders') {
+            const pool = ['AXE_RUBY_RAIDER', 'ASSASSIN_RUBY_RAIDER', 'BRUTE_RUBY_RAIDER', 'CROSSBOW_RUBY_RAIDER', 'TRACKER_RUBY_RAIDER'];
+            const picked = this.rng.pickMany(pool, this.enc.count || 3);
+            units.push(...picked);
+          } else units.push(u);
+        }
+      }
+      // repeat：同一个敌人出场多次（外骨骼虫 4 只、千足虫 3 段）
+      if (this.enc.repeat) {
+        const base = units[0];
+        units = Array.from({ length: this.enc.repeat }, (_, i) => ({
+          id: typeof base === 'object' ? base.id : base,
+          slot: (this.enc.slots || [])[i] ?? null,
+        }));
+      }
+      // slot：多数敌人的起手招式按站位决定（Exoskeleton / Myte / Decimillipede）
+      if (this.enc.slots) {
+        units = units.map((u, i) => (typeof u === 'object' && u
+          ? { ...u, slot: u.slot ?? this.enc.slots[i] }
+          : { id: u, slot: this.enc.slots[i] ?? null }));
       }
     }
 
-    units.forEach((id, i) => {
+    units.forEach((u, i) => {
+      // 单位可以是字符串，也可以是 { id, slot, extra } —— 多幕的遭遇编组要靠 slot 决定起手招式
+      const id = typeof u === 'object' && u ? u.id : u;
+      const extra = (typeof u === 'object' && u) ? { ...(u.extra || {}), slot: u.slot } : {};
       if (id === 'THE_KIN') {
         spawn('KIN_FOLLOWER', { startsWithDance: true });
         spawn('KIN_FOLLOWER');
         spawn('KIN_PRIEST');
         return;
       }
-      const e = spawn(id);
+      const e = spawn(id, extra);
+      e.encIndex = i;   // 站位序号：部分敌人的起手招式按序号错开（咬人卷轴）
+      if (id === 'CHOMPER' && this.enc.screamSecond && i === 1) e.screamFirst = true;
+      if (id === 'DECIMILLIPEDE_SEGMENT') {
+        e.segIndex = i;
+        // 三节的最大生命互相错开（每节取偶数，重复则 +2，越过上限回到下限）
+        const lo = this.asc >= 8 ? 46 : 40, hi = this.asc >= 8 ? 52 : 46;
+        let hp = e.maxHp % 2 ? e.maxHp + 1 : e.maxHp;
+        while (this.enemies.some(o => o !== e && o.id === id && o.maxHp === hp)) {
+          hp += 2;
+          if (hp > hi) hp = lo;
+        }
+        e.maxHp = hp; e.hp = hp;
+      }
       if (id === 'INKLET') { e.middle = this.enc.middle === i; }
       if (id === 'NIBBIT') { e.isFront = i === 0; }
       if (id === 'KIN_FOLLOWER' && e.startsWithDance) e.moveKey = 'dance';
@@ -432,6 +511,11 @@ export class Combat {
       if (r?.onCombatStart) await r.onCombatStart(this, r);
     }
     if (this.run.relics.includes('SNECKO_EYE')) this.confusion = true;
+    // 注能（附魔）：每场战斗开始时自动打出
+    for (const card of this.allCombatCards().filter(c => c.enchant?.autoPlay).slice()) {
+      await this.autoPlay(card);
+      if (this.finished) return;
+    }
     await this.startPlayerTurn(true);
   }
 
@@ -445,6 +529,8 @@ export class Combat {
     this.cardsPlayedThisTurn = 0;
     this.attacksPlayedThisTurn = 0;
     this.shivsPlayedThisTurn = 0;
+    // 开悟（未升级）：只把「本回合」的费用改写清掉
+    for (const card of this.allCombatCards()) if (card.costOverrideTurn != null) delete card.costOverrideTurn;
     this.skillsPlayedThisTurn = 0;
     this.cardsDrawnThisTurn = 0;
     this.discardedThisTurn = 0;
@@ -452,6 +538,11 @@ export class Combat {
     this.energySpentThisTurn = 0;
     this.statusCardsDrawnThisTurn = 0;
     this.zeroCostAttacksPlayed = 0;
+    // 玩家回合开始的敌人侧重置：硬化外壳的每回合上限、胆小的每回合一次
+    for (const e of this.enemies) {
+      if (!e.alive || !e.def) continue;
+      if (e.def.onPlayerTurnStart) e.def.onPlayerTurnStart(this, e);
+    }
     // 回响形态：每回合重新发放 N 次「额外打出一次」
     this.player.echoFormUses = this.player.powers.echoForm || 0;
     this.player.attackCounter = 0;
@@ -480,6 +571,14 @@ export class Combat {
 
     // 回合开始触发（亡灵契约师：倒计时 / 精神过载 / 下回合召唤 / 哨卫模式 / 首回合遗物）
     if (this.necro) await this.necro.onTurnStart(this.turn);
+    // 盾墙（活体盾）：玩家回合开始时，高塔炮手获得格挡
+    for (const e of this.alive()) {
+      if (!e.powers.rampart) continue;
+      for (const t of this.alive()) {
+        if (t.id !== 'TURRET_OPERATOR') continue;
+        await this.enemyBlock(t, e.powers.rampart);
+      }
+    }
     if (this.player.powers.noxiousFumes) await this.addPowerAll('poison', this.player.powers.noxiousFumes);
     if (this.player.powers.infiniteBlades) await this.addShiv(this.player.powers.infiniteBlades, this.player.powers.infiniteBlades > 1);
     if (this.player.powers.wraithForm) {
@@ -494,6 +593,14 @@ export class Combat {
     if (this.player.powers.crimsonMantle) {
       await this.loseHp(1, { silent: true });
       await this.block(this.player.powers.crimsonMantle, { silent: true });
+    }
+    if (this.player.powers.helloWorld) {
+      // 你好世界：回合开始时把随机普通牌加入手牌
+      for (let i = 0; i < this.player.powers.helloWorld; i++) {
+        const opts = this.run.poolByRarity('common');
+        if (!opts.length) break;
+        this.addCardToHand(this.makeCard(this.rng.pick(opts).id));
+      }
     }
     if (this.player.powers.aggression) {
       const atk = this.discardPile.filter(c => c.type === 'attack');
@@ -518,6 +625,15 @@ export class Combat {
     // 能量（遗物提供的能量统一走 onTurnStart）
     const baseEnergy = this.run.energyPerTurn || 3;
     this.maxEnergy = this.necro ? this.necro.modifyMaxEnergy(baseEnergy) : baseEnergy;
+    // 先古遗物：+1 能量的那批统一走 modifyMaxEnergy
+    for (const rid of this.run.relics) {
+      const r = RELICS[rid];
+      if (r?.modifyMaxEnergy) this.maxEnergy += r.modifyMaxEnergy(this);
+    }
+    // 佩尔的士兵：冷却每回合减 1
+    if (this.run.relicData.paelsLegionCd > 0) this.run.relicData.paelsLegionCd--;
+    // 衰朽：每回合获得的能量减少 1
+    if (this.player.powers.wasteAway) this.maxEnergy = Math.max(0, this.maxEnergy - this.player.powers.wasteAway);
     this.energy = (this.player._carryEnergy || 0) + this.maxEnergy + (this.player.powers.pyre || 0);
     this.player._carryEnergy = 0;
 
@@ -600,9 +716,25 @@ export class Combat {
     let drawCount = 5 + this.extraDrawPerTurn + (first ? this.firstTurnDraw : 0)
       + (this.player.powers.drawNextTurn || 0) + (this.player.powers.machineLearning || 0)
       + (this.player.powers.tyranny || 0);
+    // 心灵腐化：每回合少抽 1 张牌（可叠加）
+    if (this.player.powers.mindRot) drawCount -= this.player.powers.mindRot;
+    drawCount = Math.max(0, drawCount);
     if (this.necro) drawCount = this.necro.beforeHandDraw(drawCount);  // 领域：每回合多抽 1
     delete this.player.powers.drawNextTurn;
-    await this.draw(drawCount, { silent: true });
+    // 遗物：抽牌前的触发（发光珍珠 / 宝石面具 / 选择悖论 / 赐福鹿角）
+    for (const rid of this.run.relics) {
+      const r = RELICS[rid];
+      if (r?.beforeDraw) await r.beforeDraw(this, this.turn);
+    }
+    this.drawLocked = false;
+    await this.draw(drawCount, { silent: true, handDraw: true });
+    // 小提琴：回合开始的抽牌结束后，本回合不能再抽牌
+    if (this.run.relics.includes('FIDDLE')) this.drawLocked = true;
+    // 遗物：抽牌后的触发（低语耳环：瓦库接管第一回合）
+    for (const rid of this.run.relics) {
+      const r = RELICS[rid];
+      if (r?.afterDraw) await r.afterDraw(this, this.turn);
+    }
     if (this.player.powers.toolsOfTheTrade) { await this.draw(1); await this.discardCards(1); }
     // 暴政：抽牌后消耗手牌（TyrannyPower.AfterPlayerTurnStart）
     if (this.player.powers.tyranny) {
@@ -618,6 +750,15 @@ export class Combat {
 
   /* ---------------- 抓牌/弃牌 ---------------- */
   async draw(n, opts = {}) {
+    // 小提琴：回合开始的那次抽牌之后，本回合不再能抽任何牌
+    if (this.drawLocked && !opts.handDraw) return [];
+    // 遗物改写本次抽牌数量（授粉核心 / 大蘑菇）
+    if (n > 0) {
+      for (const rid of this.run.relics) {
+        const r = RELICS[rid];
+        if (r?.modifyDraw) n = r.modifyDraw(this, n, opts);
+      }
+    }
     const out = [];
     let budget = n;
     let guard = 0;
@@ -629,9 +770,21 @@ export class Combat {
         if (!this.discardPile.length) break;
         this.drawPile = this.rng.shuffle(this.discardPile);
         this.discardPile = [];
+        this.hoistPerfectFit();
+        // 大～抱抱：抽牌堆每次洗牌时塞一张煤灰
+        for (const rid of this.run.relics) {
+          const r = RELICS[rid];
+          if (r?.onShuffle) await r.onShuffle(this);
+        }
       }
       const card = this.drawPile.pop();
       if (this.confusion) card.confusedCost = this.rng.int(4);
+      // 魂缚锁链：本回合抽到的前 N 张牌被侵蚀为「魂缚」
+      const chains = this.player.powers.chainsOfBinding;
+      if (chains && (this.boundCardsDrawn || 0) < chains) {
+        this.boundCardsDrawn = (this.boundCardsDrawn || 0) + 1;
+        card.bound = true;
+      }
       this.hand.push(card);
       out.push(card);
       // 亡灵契约师：书页风暴（抽到虚无牌多抽）/ 死亡行军的「回合内额外抽牌」计数
@@ -756,6 +909,12 @@ export class Combat {
   /* ---------------- 伤害 ---------------- */
   calcPlayerAttack(base, target, opts = {}) {
     let d = base;
+    // 附魔：锋利/迅猛加固定伤害，腐化按比例增伤（只作用于这张牌本身）
+    const ench = this.currentCard && this.currentCard.enchant;
+    if (ench && !opts.osty) {
+      if (ench.dmg) d += ench.dmg;
+      if (ench.dmgPct) d = Math.floor(d * ench.dmgPct);
+    }
     if (opts.osty) {
       // FromOsty：攻击者是奥斯提而非玩家 → 不吃玩家力量/虚弱/钢笔尖/暗影步/跟踪，
       // 但仍吃目标身上的易伤与无实体（对照 AttackCommand.cs 的 dealer 修正）
@@ -785,6 +944,8 @@ export class Combat {
       if (this.run.relics.includes('VITRUVIAN_MINION') && this.currentCard?.tags?.includes('minion')) d *= 2;
       // 暗影步：本回合攻击翻倍
       if (this.player.powers.shadowStep) d *= 2;
+      // 打击木偶：名字带「打击」的牌额外 +1（事件里的仿制品）
+      if (this.run.relics.includes('FAKE_STRIKE_DUMMY') && (this.currentCard?.tags || []).includes('strike')) d += 1;
     }
     if (this.necro) d = this.necro.modifyDamage(d, target, opts);
     return Math.max(0, Math.floor(d));
@@ -833,11 +994,32 @@ export class Combat {
     }
     let remain = amount;
     let absorbed = 0;
+    // 敌人数据层的伤害修正：单次伤害上限（难杀）、受到攻击减伤（飘忽）
+    if (!target.isPlayer && target.def) {
+      if (target.def.damageCap) {
+        const cap = target.def.damageCap(this, target);
+        if (cap != null) remain = Math.min(remain, cap);
+      }
+      if (target.def.incomingScale) {
+        const s = target.def.incomingScale(this, target, opts);
+        if (s != null && s !== 1) remain = Math.floor(remain * s);
+      }
+    }
     if (target.block > 0 && !opts.ignoreBlock) {
       absorbed = Math.min(target.block, remain);
       target.block -= absorbed;
       remain -= absorbed;
       if (absorbed > 0) this.float(target, '-' + absorbed, 'block');
+      // 手钻：突破敌人格挡时给予 2 层易伤
+      if (absorbed > 0 && target.block <= 0 && !target.isPlayer && opts.isAttack
+          && this.run.relics.includes('HAND_DRILL')) {
+        await this.enemyPower(target, 'vulnerable', 2);
+      }
+    }
+    // 发条靴：玩家造成的未格挡攻击伤害不足 5 点时提升为 5
+    if (remain > 0 && remain < 5 && opts.isAttack && !target.isPlayer && !opts.osty
+        && this.run.relics.includes('THE_BOOT')) {
+      remain = 5;
     }
     // 为你而死（DieForYouPower）：玩家格挡先吸收，未格挡的攻击伤害转给存活的奥斯提，
     // 奥斯提被打死后溢出部分回流玩家；非攻击伤害（中毒/遗物/能力）不转嫁。
@@ -914,6 +1096,31 @@ export class Combat {
       }
     }
 
+    // 敌人数据层的受击钩子：失衡 / 沉睡苏醒 / 格挡被打穿 / 塞牌等
+    if (!target.isPlayer && target.def && target.def.onDamaged) {
+      await target.def.onDamaged(this, target, {
+        blocked: absorbed,
+        unblocked: Math.max(0, remain),
+        isAttack: !!opts.isAttack,
+        fullyBlocked: absorbed > 0 && remain <= 0,
+      });
+      if (!target.alive) return;
+    }
+
+    // 敌人打到你身上且未被格挡：纸伤难愈（掉最大生命）/ 疼痛戳刺（塞伤口）
+    if (target.isPlayer && remain > 0 && opts.source && !opts.source.isPlayer && opts.isAttack) {
+      const src = opts.source;
+      if (src.powers && src.alive !== false) {
+        if (src.powers.paperCuts) {
+          this.logEvent('power', `「纸伤难愈」：${src.name} 撕开了你的生命上限`);
+          this.loseMaxHp(src.powers.paperCuts);
+        }
+        if (src.powers.painfulStabs) {
+          await this.addCard('WOUND', 'discard', false, src.powers.painfulStabs);
+        }
+      }
+    }
+
     if (target.hp <= 0) {
       if (target.isPlayer) {
         this.player.hp = 0;
@@ -930,10 +1137,17 @@ export class Combat {
 
   async killEnemy(e) {
     if (!e.alive) return;
+    // 断肢重连一类的「假死」：返回 true 表示没有真正倒下
+    if (e.def && e.def.onDeath && await e.def.onDeath(this, e)) { this.emit(); return; }
     e.alive = false;
     e.hp = 0;
     this.msg(`${e.name} 被击败`);
     if (e.powers.sporeCloud) await this.addPower('vulnerable', e.powers.sporeCloud);
+    // 蟹之怒：盟友倒下时，同侧其它敌人获得力量与格挡
+    for (const ally of this.enemies) {
+      if (ally === e || !ally.alive) continue;
+      if (ally.def.onAllyDeath) await ally.def.onAllyDeath(this, ally, e);
+    }
     // 首领倒下 → 小兵随之消散（原作 Minion 特性）
     if (!e.minion) {
       for (const ally of this.alive()) {
@@ -955,8 +1169,44 @@ export class Combat {
     }
   }
 
+  /** 敌人逃离战斗（逃脱大师）：不计入击杀，全员离场则算胜利 */
+  async escapeEnemy(e) {
+    if (!e.alive) return;
+    if (e.def.onDeath) await e.def.onDeath(this, e);
+    e.alive = false;
+    e.hp = 0;
+    this.msg(`${e.name} 溜走了`);
+    this.emit();
+    await this.wait(200);
+    if (!this.alive().length) {
+      this.finished = true;
+      this.won = true;
+      this.timedOut = true;      // 敌人溜走：不算击败，事件不给奖励
+      this.cancelSelection();
+      if (!this.player.powers.barricade) this.player.block = 0;
+      this.emit();
+    }
+  }
   /* ---------------- 格挡/能力 ---------------- */
   async block(amount, opts = {}) {
+    // 附魔：灵巧额外获得格挡（只作用于这张牌本身）
+    if (this.currentCard && this.currentCard.enchant && this.currentCard.enchant.block) {
+      amount += this.currentCard.enchant.block;
+    }
+    // 附魔：黏糊（佩尔之爪）—— 这张牌的格挡值永久 +1，写回牌组条目
+    if (this.currentCard && this.currentCard.enchant && this.currentCard.enchant.goopy && !opts.raw) {
+      const c = this.currentCard;
+      c.goopyBonus = (c.goopyBonus || 0) + 1;
+      if (c.persist) c.persist.goopy = c.goopyBonus;
+      amount += c.goopyBonus - 1;
+    }
+    // 佩尔的士兵：从卡牌获得的格挡翻倍，然后休眠 2 个回合
+    const rd = this.run.relicData;
+    if (this.currentCard && !opts.raw && this.run.relics.includes('PAELS_LEGION')
+        && (rd.paelsLegionCd || 0) <= 0) {
+      amount *= 2;
+      rd.paelsLegionCd = 2;
+    }
     let b = opts.raw ? amount : this.playerBlockGain(amount);
     if (b <= 0) return;
     this.player.block += b;
@@ -1025,6 +1275,26 @@ export class Combat {
 
   async enemyBlock(e, n) { e.block += n; this.emit(); await this.wait(60); }
 
+  async enemyHeal(e, n) {
+    e.hp = Math.min(e.maxHp, e.hp + n);
+    this.float(e, '+' + n, 'heal');
+    this.emit();
+    await this.wait(80);
+  }
+
+  /** 地精佣兵的偷窃：从玩家身上拿走金币，记在敌人身上（打倒它可以拿回来） */
+  async stealGold(e, n) {
+    const steal = Math.min(n, this.run.gold);
+    if (steal <= 0) return 0;
+    this.run.gold -= steal;
+    e.stolenGold = (e.stolenGold || 0) + steal;
+    this.float(this.player, `-${steal} 金币`, 'debuff');
+    this.logEvent('system', `${e.name} 偷走了 ${steal} 金币`);
+    this.emit();
+    await this.wait(60);
+    return steal;
+  }
+
   /* ---------------- 玩家动作 ---------------- */
   canPlay(card) {
     if (this.finished) return false;
@@ -1036,6 +1306,14 @@ export class Combat {
     const sc = this.starCostOf(card);
     if (typeof sc === 'number' && sc > this.player.stars) return false;
     if (this.player.powers.ringing === 0) return false;
+    // 魂缚：每回合只能打出其中 1 张
+    if (card.bound && (this.boundCardsPlayed || 0) > 0) return false;
+    // 懒惰：每回合最多打出 N 张牌
+    if (this.player.powers.sloth && this.cardsPlayedThisTurn >= this.player.powers.sloth) return false;
+    // 烟雾弥漫：每回合只能打出 1 张技能牌
+    if (this.player.powers.smoggy && card.type === 'skill' && this.skillsPlayedThisTurn >= 1) return false;
+    // 凡庸：这张诅咒在手里时，每回合最多打出 3 张牌
+    if (this.cardsPlayedThisTurn >= 3 && this.hand.some((h) => h.id === 'NORMALITY')) return false;
     return true;
   }
 
@@ -1049,12 +1327,24 @@ export class Combat {
     if (this.player.powers.freeSkill > 0 && card.type === 'skill') c = 0;
     if (this.player.powers.freePower > 0 && card.type === 'power') c = 0;
     if (this.player.powers.tangled && card.type === 'attack') c += 1;
+    // 好奇（打造时间）：能力牌耗能 -1
+    if (this.player.powers.curious && card.type === 'power') c -= this.player.powers.curious;
+    // 羽化：生成的攻击牌本场战斗免费
+    if (card.freeCombat) c = 0;
+    // 开悟：手牌耗能降到 1（升级版持续整场，未升级只持续本回合）
+    if (card.costOverrideCombat != null) c = Math.min(c, card.costOverrideCombat);
+    if (card.costOverrideTurn != null) c = Math.min(c, card.costOverrideTurn);
     // 剑圣：君王之剑耗能 +N（SwordSagePower）
     if (card.id === 'SOVEREIGN_BLADE' && this.player.powers.swordSage) c += this.player.powers.swordSage;
     // 虚空形态：每回合前 N 张牌能量为 0
     if (this.player.powers.voidForm && this.player.voidFormUses < this.player.powers.voidForm) c = 0;
     const def = CARDS[card.id];
     if (def.costMod) c += def.costMod(card, this);
+    // 遗物改写费用（带刺手甲：能力牌 +1）
+    for (const rid of this.run.relics) {
+      const r = RELICS[rid];
+      if (r?.modifyCost) c = r.modifyCost(this, card, c);
+    }
     if (this.necro) c = this.necro.modifyCost(card, c);
     return Math.max(0, c);
   }
@@ -1126,6 +1416,15 @@ export class Combat {
     this.cardsPlayedThisCombat++;
     if (card.type === 'skill') this.skillsPlayedThisTurn++;
     if (card.type === 'power') this.powersPlayedThisTurn++;
+    // 魂缚：打出后本回合剩余的魂缚牌不能再打出
+    if (card.bound) this.boundCardsPlayed = (this.boundCardsPlayed || 0) + 1;
+    // 柔嫩（Tender）：本回合每打出一张牌，失去 1 点力量与敏捷，回合结束时归还
+    if (this.player.powers.tender) {
+      this.player.tenderLoss = (this.player.tenderLoss || 0) + 1;
+      this.player.powers.strength = (this.player.powers.strength || 0) - 1;
+      this.player.powers.dexterity = (this.player.powers.dexterity || 0) - 1;
+      this.logEvent('power', '「柔嫩」：失去 1 点力量与敏捷');
+    }
 
     const aimed = card.def.target === 'enemy' && this._target && this._target.alive ? ` → ${this._target.name}` : '';
     const costText = isX ? `X=${xValue}` : cost > 0 ? `${cost} 能量` : '免费';
@@ -1139,7 +1438,12 @@ export class Combat {
     if (this.necro) await this.necro.beforeCardPlayed(card, isX ? xValue : cost);
 
     // 连环拳 / 下次攻击免费 / 爆发 / 回响形态 / 信号增强 / 重构（重放）
-    let replay = 1 + (card.replayBonus || 0);
+    let replay = 1 + (card.replayBonus || 0) + (card.enchant?.replay || 0);
+    // 投斧：每场战斗打出的第一张牌多打出一次
+    if (this.run.relics.includes('THROWING_AXE') && !this.run.relicData.throwingAxeUsed) {
+      this.run.relicData.throwingAxeUsed = true;
+      replay += 1;
+    }
     if (card.type === 'attack') {
       this.attacksPlayedThisTurn++;
       this.player.attackCounter++;
@@ -1178,6 +1482,9 @@ export class Combat {
       if (this.finished) break;
       await card.def.play(this, card);
     }
+    // 附魔：腐化打出扣血、迅捷打出抽牌
+    if (!this.finished && card.enchant?.hpLoss) await this.loseHp(card.enchant.hpLoss, { silent: true });
+    if (!this.finished && card.enchant?.draw) await this.draw(card.enchant.draw);
 
     // 亡灵契约师：虚无计数 / 灵魂 / 湮灭 / 象牙麻将牌
     if (this.necro) await this.necro.afterCardPlayed(card, isX ? xValue : cost);
@@ -1226,6 +1533,22 @@ export class Combat {
       if (e.powers.enrage && card.type === 'skill') await this.enemyPower(e, 'strength', e.powers.enrage);
     }
 
+    // 第三幕：流电（能力牌被侵蚀，打出后受伤）/ 凋零气场（每 N 张牌塞一张凋零）
+    for (const e of this.alive()) {
+      if (e.powers.galvanic && card.type === 'power') {
+        this.logEvent('power', `「流电」：${e.name} 的电流灼烧你的能力牌`);
+        await this.dealDamage(this.player, e.powers.galvanic, { source: e });
+      }
+      if (e.def && e.def.onPlayerCardPlayed) await e.def.onPlayerCardPlayed(this, e, card);
+      if (this.finished) break;
+    }
+    // 遗物：打出牌时触发（迷失鬼火）
+    for (const rid of this.run.relics) {
+      const r = RELICS[rid];
+      if (r?.onCardPlayed) await r.onCardPlayed(this, card);
+      if (this.finished) break;
+    }
+
     this.currentCard = null;
 
     // 野性：每回合前 N 张 0 费攻击牌回到手牌
@@ -1248,6 +1571,12 @@ export class Combat {
     } else if (card.type === 'power') {
       // 能力牌打出后不再回到牌堆（本场战斗内一直生效）
       this.powerPile.push(card);
+    } else if (this.player.powers.rebound > 0) {
+      // 弹回：本回合打出的下一张牌回到抽牌堆顶部
+      this.player.powers.rebound--;
+      if (this.player.powers.rebound <= 0) delete this.player.powers.rebound;
+      this.drawPile.push(card);
+      this.logEvent('power', `「弹回」：${card.name} 回到了抽牌堆顶部`);
     } else {
       this.discardPile.push(card);
     }
@@ -1277,6 +1606,11 @@ export class Combat {
     this.exhaustedThisTurn++;
     if (this.player.powers.feelNoPain) await this.block(this.player.powers.feelNoPain, { silent: true });
     if (this.player.powers.darkEmbrace) await this.draw(this.player.powers.darkEmbrace);
+    // 遗物：消耗时触发（遗忘之魂）
+    for (const rid of this.run.relics) {
+      const r = RELICS[rid];
+      if (r?.onExhaust) await r.onExhaust(this, card);
+    }
     this.emit();
   }
 
@@ -1292,6 +1626,7 @@ export class Combat {
     if (!this.drawPile.length && this.discardPile.length) {
       this.drawPile = this.rng.shuffle(this.discardPile);
       this.discardPile = [];
+      this.hoistPerfectFit();
     }
     const card = this.drawPile.pop();
     if (card) {
@@ -1306,6 +1641,7 @@ export class Combat {
     if (!this.drawPile.length && this.discardPile.length) {
       this.drawPile = this.rng.shuffle(this.discardPile);
       this.discardPile = [];
+      this.hoistPerfectFit();
     }
     const card = this.drawPile.pop();
     if (!card) return;
@@ -1358,6 +1694,12 @@ export class Combat {
     this.emit();
   }
 
+  /** 完美契合：把附魔过的牌挪到抽牌堆顶部（drawPile.pop() 先取到） */
+  hoistPerfectFit() {
+    const fitted = this.drawPile.filter(c => c.perfectFit);
+    if (fitted.length) this.drawPile = this.drawPile.filter(c => !c.perfectFit).concat(fitted);
+  }
+
   addCardToHand(card, generated = false) {
     if (this.hand.length < 10) this.hand.push(card);
     else this.discardPile.push(card);
@@ -1399,7 +1741,7 @@ export class Combat {
 
   randomCardOfType(type) {
     const ids = Object.values(CARDS)
-      .filter(d => d && d.type === type && !['status', 'curse', 'basic', 'token'].includes(d.rarity))
+      .filter(d => d && d.type === type && !['status', 'curse', 'basic', 'token', 'event', 'quest'].includes(d.rarity))
       .filter(d => !d.char || d.char === 'NEUTRAL' || d.char === this.run.charId)
       .map(d => d.id);
     if (!ids.length) return null;
@@ -1446,6 +1788,19 @@ export class Combat {
     this.player.maxHp += n;
     this.run.maxHp += n;
     this.healPlayer(n);
+  }
+
+  /** 失去最大生命（纸伤难愈）：不会低于 1，当前生命同步压到上限 */
+  loseMaxHp(n) {
+    const loss = Math.max(0, Math.min(n, this.player.maxHp - 1));
+    if (!loss) return;
+    this.player.maxHp -= loss;
+    this.run.maxHp = Math.max(1, this.run.maxHp - loss);
+    if (this.player.hp > this.player.maxHp) this.player.hp = this.player.maxHp;
+    this.syncHp();
+    this.float(this.player, `-${loss} 上限`, 'debuff');
+    this.logEvent('power', `你失去了 ${loss} 点最大生命`);
+    this.emit();
   }
 
   gainEnergy(n) {
@@ -1603,6 +1958,26 @@ export class Combat {
     for (const card of [...this.hand]) {
       if (card.id === 'BURN') await this.dealDamage(this.player, 2, {});
       if (card.id === 'INFECTION') await this.dealDamage(this.player, 1, {});
+      if (card.id === 'TOXIC') await this.dealDamage(this.player, 5, {});
+      // 呼唤（灵魂异鱼）：不可格挡的 6 点生命损失
+      if (card.id === 'BECKON') await this.dealDamage(this.player, 6, { ignoreBlock: true });
+      // 凋零（永世之镜）：3 点起，每被「渐强」假升级一次 +3
+      if (card.id === 'WITHER') await this.dealDamage(this.player, 3 + 3 * (card.witherLevel || 0), {});
+      // 诅咒：腐朽 / 霉运 / 悔恨 / 羞耻 / 疑虑（回合结束时留在手里才触发）
+      if (card.id === 'DECAY') await this.dealDamage(this.player, 2, {});
+      if (card.id === 'BAD_LUCK') await this.loseHp(13);
+      if (card.id === 'REGRET') await this.loseHp(this.hand.length);
+      if (card.id === 'SHAME') await this.addPower('frail', 1);
+      if (card.id === 'DOUBT') await this.addPower('weak', 1);
+      // 债务：回合结束时手里还有它，就丢掉 10 金币
+      if (card.id === 'DEBT') {
+        const loss = Math.min(10, this.run.gold);
+        if (loss > 0) {
+          this.run.gold -= loss;
+          this.logEvent('system', `「债务」让你失去了 ${loss} 金币`);
+          this.emit();
+        }
+      }
     }
     if (this.finished) return;
 
@@ -1646,6 +2021,17 @@ export class Combat {
     }
     this.player.tempStr = 0;
 
+    // 柔嫩：归还本回合损失的力量与敏捷，然后层数 -1
+    if (this.player.powers.tender) {
+      const loss = this.player.tenderLoss || 0;
+      if (loss) {
+        this.player.powers.strength = (this.player.powers.strength || 0) + loss;
+        this.player.powers.dexterity = (this.player.powers.dexterity || 0) + loss;
+        this.player.tenderLoss = 0;
+      }
+      this.player.powers.tender--;
+      if (this.player.powers.tender <= 0) delete this.player.powers.tender;
+    }
     // 本回合临时敏捷回收
     if (this.player.tempDex) {
       this.player.powers.dexterity = (this.player.powers.dexterity || 0) - this.player.tempDex;
@@ -1665,10 +2051,19 @@ export class Combat {
     // 敌人身上的「征服者」在其一方回合结束时递减，见 enemyTurn()
 
     // 虚无：回合结束时还留在手里的牌直接消耗（不分是否保留手牌）
+    // 恶咒（幽灵骑士）：它活着时你的所有手牌都被视为「虚无」
+    const hexed = this.hexActive();
     for (const card of [...this.hand]) {
-      if (card.ethereal) await this.exhaustCard(card);
+      if (card.ethereal || hexed) await this.exhaustCard(card);
     }
     if (this.finished) return;
+
+    // 魂缚锁链：回合结束时解除本回合的「魂缚」标记
+    if (this.player.powers.chainsOfBinding) {
+      this.boundCardsPlayed = 0;
+      this.boundCardsDrawn = 0;
+      for (const c of this.allCombatCards()) c.bound = false;
+    }
 
     // 弃手牌（符文金字塔 / 保留手牌全保留；计划妥当按费用保留；带「保留」的单卡也留）
     const retainAll = this.run.relics.includes('RUNIC_PYRAMID') || this.player.powers.retainHand > 0;
@@ -1716,6 +2111,18 @@ export class Combat {
   }
 
   async enemyTurn() {
+    // 沙坑（无厌沙虫的场地机制）：敌人一方回合开始时倒计时 -1，归零则玩家被拖入地下
+    const pit = this.enemies.find(e => e.alive && e.sandpit != null);
+    if (pit) {
+      pit.sandpit--;
+      this.emit();
+      if (pit.sandpit <= 0) {
+        this.msg('沙坑吞没了你');
+        await this.dealDamage(this.player, 999, { ignoreBlock: true });
+        return;
+      }
+      this.logEvent('system', `沙坑的倒计时还剩 ${pit.sandpit}`);
+    }
     for (const e of this.alive()) {
       if (this.finished) return;
       if (!e.alive) continue;
@@ -1723,7 +2130,9 @@ export class Combat {
       const mv = e.def.moves[e.moveKey];
       if (!mv) continue;
 
-      e.block = 0;
+      // 埋地（Burrowed）：格挡不会在敌人回合开始时清空
+      const keepBlock = typeof e.def.keepBlock === 'function' ? e.def.keepBlock(e) : e.def.keepBlock;
+      if (!keepBlock) e.block = 0;
       this.actingEnemy = e;
       this.emit();
       await this.wait(180);
@@ -1737,7 +2146,11 @@ export class Combat {
       if (e.alive) {
         await this.tickPoison(e);
         if (!e.alive) { this.emit(); await this.wait(80); continue; }
-        if (e.powers.ritual) await this.enemyPower(e, 'strength', e.powers.ritual);
+        // 仪式：施加当回合的「回合结束」不计入（RitualPower._skipFirstEnemyTurnEnd）
+        if (e.powers.ritual) {
+          if (e.ritualSkip) e.ritualSkip--;
+          else await this.enemyPower(e, 'strength', e.powers.ritual);
+        }
         if (e.powers.plating) { e.block += e.powers.plating; }
         for (const k of ['vulnerable', 'weak', 'frail', 'shrink', 'tangled', 'conqueror']) {
           if (e.powers[k] != null) {
@@ -1746,6 +2159,9 @@ export class Combat {
           }
         }
         e.tempStr = 0;
+        // 数据层的「自己回合结束」钩子：沉睡计时、逃脱大师倒数等
+        if (e.def.onTurnEnd) await e.def.onTurnEnd(this, e);
+        if (!e.alive) { this.emit(); continue; }
         this.rollIntent(e);
       }
       this.emit();
@@ -1761,9 +2177,12 @@ export class Combat {
   }
 
   async enemyAttackRaw(e, base, times = 1) {
+    // 活力（VigorPower）：整次攻击（含多段）都加上层数，攻击结束后清零
+    const vigor = e.powers.vigor || 0;
+    let unblockedHits = 0;
     for (let i = 0; i < times; i++) {
       if (!e.alive || this.finished) return;
-      let d = base + this.str(e);
+      let d = base + this.str(e) + vigor;
       // 摧残：虚弱倍率 0.75 → 0.5，易伤 1.5 → 2
       if (e.powers.weak) d = Math.floor(d * (e.powers.debilitate ? 0.5 : 0.75));
       if (this.player.powers.vulnerable) d = Math.floor(d * (this.player.powers.debilitate ? 2 : 1.5));
@@ -1773,11 +2192,18 @@ export class Combat {
       e.acting = true;
       this.emit();
       await this.wait(140);
+      const hpBefore = this.player.hp;
       await this.dealDamage(this.player, Math.max(0, d), { isAttack: true, source: e });
+      if (this.player.hp < hpBefore) unblockedHits++;
       e.acting = false;
       this.emit();
       await this.wait(80);
       if (this.finished) return;
+    }
+    if (vigor) delete e.powers.vigor;
+    // 吮吸（SuckPower）：每次造成未被格挡的伤害就叠力量
+    if (e.powers.suck && unblockedHits > 0) {
+      await this.addPower('strength', e.powers.suck * unblockedHits, e);
     }
   }
 
@@ -1787,6 +2213,13 @@ export class Combat {
       def.onPhase(this, e);
       e.moveKey = 'stun';
       e.seqIndex = 0;
+      return;
+    }
+    // ai(C, e, pick) 是数据层自定义状态机：返回下一招的 key；pick(pairs) 抽带权重的随机分支
+    if (def.ai) {
+      const pick = (pairs) => this.weightedPick(pairs);
+      e.lastMove = e.moveKey;
+      e.moveKey = def.ai(this, e, pick) || Object.keys(def.moves)[0];
       return;
     }
     let key = null;
@@ -1814,26 +2247,92 @@ export class Combat {
     return pairs[pairs.length - 1][0];
   }
 
-  async spawnEnemy(id, from) {
+  /**
+   * 战斗中动态加入敌人（组装师召唤、库存补机体、产卵等）。
+   * extra 会写进敌人对象（stock / bootFirst / starter 等），并参与 onSpawn。
+   */
+  async spawnEnemy(id, from, extra = {}) {
     const def = ENEMIES[id];
-    const hp = def.hp[0] === def.hp[1] ? def.hp[0] : this.rng.range(def.hp[0], def.hp[1]);
+    if (!def) throw new Error('未知敌人 ' + id);
+    const hpRange = (this.asc >= 8 && def.hpAsc) ? def.hpAsc : def.hp;
+    const hp = hpRange[0] === hpRange[1] ? hpRange[0] : this.rng.range(hpRange[0], hpRange[1]);
+    let n = this.enemies.length + 1;
+    while (this.enemies.some((o) => o.uid === 'e' + n)) n++;
     const e = {
-      uid: 'e' + (this.enemies.length + 1), id, def, name: def.name, icon: def.icon,
+      uid: 'e' + n, id, def, name: def.name, icon: def.icon,
       hp, maxHp: hp, block: 0, powers: {}, tempStr: 0, seqIndex: 0, moveKey: null,
       alive: true, summoned: true, history: [],
+      elite: !!def.elite, boss: !!def.boss, minion: !!def.minion,
+      ...extra,
     };
+    if (def.onSpawn) def.onSpawn(this, e);
     this.enemies.push(e);
     this.rollIntent(e);
     this.emit();
     await this.wait(200);
+    return e;
+  }
+
+  /* ---------------- 第三幕的临时状态（抑制 / 魂缚 / 凋零） ---------------- */
+
+  /** 所有牌堆里的卡（含手牌与消耗堆） */
+  allCombatCards() {
+    return [...this.drawPile, ...this.hand, ...this.discardPile, ...this.exhaustPile];
+  }
+
+  /** 抑制（魔法骑士）：把你所有已升级的卡降级，记下来以便它倒下后恢复 */
+  async applyDampen(e) {
+    if (e.dampened) return;
+    e.dampened = [];
+    for (const c of this.allCombatCards()) {
+      if (!c.upgraded) continue;
+      c.upgraded = false;
+      e.dampened.push(c);
+    }
+    this.player.powers.dampen = (this.player.powers.dampen || 0) + 1;
+    this.logEvent('power', '「抑制」：你的所有卡牌被降级');
+    this.emit();
+  }
+
+  clearDampen(e) {
+    if (!e.dampened) return;
+    for (const c of e.dampened) c.upgraded = true;
+    e.dampened = null;
+    delete this.player.powers.dampen;
+    this.logEvent('power', '「抑制」解除，你的卡牌恢复了升级');
+    this.emit();
+  }
+
+  /** 恶咒（幽灵骑士）：它活着时你的所有手牌都拥有「虚无」 */
+  hexActive() {
+    if (!this.player.powers.hex) return false;
+    return this.alive().some((e) => e.id === 'SPECTRAL_KNIGHT');
   }
 
   /* ---------------- 结束 ---------------- */
   async finish() {
     if (this.necro) this.necro.onCombatEnd();   // 禁忌魔典：追加移除牌奖励
+    // 改善（打造时间的能力牌）：战斗结束时随机升级牌组里的一张牌
+    if (this.player.powers.improvement && this.won) {
+      const pool = this.run.deck.filter((d) => !d.upgraded);
+      if (pool.length) {
+        const pick = this.rng.pick(pool);
+        pick.upgraded = true;
+        this.logEvent('system', `「改善」：升级了 ${CARDS[pick.id]?.name || pick.id}`);
+      }
+    }
     for (const rid of this.run.relics) {
       const r = RELICS[rid];
       if (r?.onCombatEnd) await r.onCombatEnd(this, r);
+    }
+    // 愧疚：5 场战斗后自动从牌组移除（Guilty.AfterCombatEnd）
+    for (const entry of this.run.deck.slice()) {
+      if (entry.id !== 'GUILTY') continue;
+      entry.crafts = (entry.crafts || 0) + 1;
+      if (entry.crafts >= 5) {
+        this.run.deck.splice(this.run.deck.indexOf(entry), 1);
+        this.logEvent('system', '「愧疚」已从你的牌组中移除');
+      }
     }
     // 王国资产：战斗胜利时按能力层数给金币（RoyaltiesPower.ModifyRewards）
     if (this.won && this.player.powers.royalties > 0) {

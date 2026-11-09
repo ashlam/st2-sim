@@ -12,7 +12,7 @@ await page.goto(`http://localhost:${process.env.PORT || 8081}/index.html`, { wai
 await page.click('[data-act="new"]'); await page.waitForTimeout(250); await page.click('[data-char="IRONCLAD"]');
 await page.click('#asc-list .choice');
 await page.waitForTimeout(200);
-await page.click('#neow-list .choice');
+await page.click('#anc-list .choice');
 await page.waitForTimeout(500);
 await page.evaluate(() => { window.DEBUG_SPEED = 0; });
 // 测试用：抬高血量以便走完整个第一幕（覆盖商店/休息/事件/宝箱/Boss）
@@ -22,6 +22,12 @@ const seen = new Set();
 for (let step = 0; step < 500; step++) {
   const status = await page.evaluate(() => {
     const q = s => document.querySelector(s);
+    // 「点一下就落地」的选择现在要先过一次确认层，先把它点掉
+    const cfm = q('.cfm-pop');
+    if (cfm) {
+      const ok = cfm.querySelector('.cfm-ok') || cfm.querySelector('.cfm-cancel');
+      if (ok) { ok.click(); return 'CONFIRM → 确认'; }
+    }
     const ov = q('.overlay-layer:not(.hidden)');
     if (ov) {
       const title = (ov.querySelector('.sheet-title') || {}).textContent || 'overlay';

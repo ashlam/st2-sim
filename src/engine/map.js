@@ -15,7 +15,35 @@ export const NODE_TYPES = {
   boss: { icon: '首', name: '首领' },
 };
 
-export function generateMap(seed, asc = 0) {
+/**
+ * 各幕的目标节点数量（对照 ActDefinition.GetMapPointTypes）：
+ *   第一幕 Overgrowth：休息处 NextGaussianInt(7,1,6,7)、未知 NextGaussianInt(12,1,10,14)
+ *   第二幕 Hive：      休息处 NextGaussianInt(6,1,6,7)、未知 同上 - 1
+ *   第三幕 Glory：     休息处 NextInt(5,7)、未知 同上 - 1
+ * 商店恒为 3；精英基础 5，进阶 1「蜂拥精英」×1.6 → 8（MapPointTypeCounts.NumOfElites）。
+ */
+function countsFor(act, asc, rng) {
+  const standardUnknown = () => rng.gaussInt(12, 1, 10, 14);
+  let rest, unknown;
+  if (act >= 3) {
+    rest = rng.range(5, 6);          // NextInt(5, 7) 右开
+    unknown = standardUnknown() - 1;
+  } else if (act === 2) {
+    rest = rng.gaussInt(6, 1, 6, 7);
+    unknown = standardUnknown() - 1;
+  } else {
+    rest = rng.gaussInt(7, 1, 6, 7);
+    unknown = standardUnknown();
+  }
+  return {
+    elite: asc >= 1 ? 8 : 5,
+    rest,
+    shop: 3,
+    unknown: Math.max(0, unknown),
+  };
+}
+
+export function generateMap(seed, asc = 0, act = 1) {
   const rng = new Rng(seed + ':map');
   let grid = Array.from({ length: ROWS }, () => Array(COLS).fill(null));
   const nodes = [];
@@ -66,10 +94,11 @@ export function generateMap(seed, asc = 0) {
   for (const n of nodes) {
     if (n.row === 0) n.type = 'monster';
   }
-  // 宝箱行固定
+  // 宝箱行固定（对照 StandardActMap：第 rowCount-7 行），最后一行为休息处
   const treasureRow = 8;
   const interior = nodes.filter(n => n.row > 0 && n.row < ROWS - 1);
   for (const n of interior) if (n.row === treasureRow) n.type = 'treasure';
+  for (const n of nodes) if (n.row === ROWS - 1) n.type = 'rest';
 
   const assignable = (n) => n.type === 'unknown';
   const sameTypeInPath = (n, type) => {
@@ -85,14 +114,15 @@ export function generateMap(seed, asc = 0) {
     return picked;
   };
 
-  pickNodes('elite', asc >= 1 ? 4 : 3, 5);
-  pickNodes('rest', 7, 4);
-  pickNodes('shop', 3, 4);
+  const counts = countsFor(act, asc, rng);
+  pickNodes('elite', counts.elite, 5);
+  pickNodes('rest', counts.rest, 4);
+  pickNodes('shop', counts.shop, 4);
 
   // 其余为战斗，再随机挑一部分变成“未知”
   const restPool = interior.filter(n => n.type === 'unknown' && n.row !== treasureRow);
   restPool.forEach(n => { n.type = 'monster'; });
-  rng.shuffle(restPool).slice(0, 11).forEach(n => { n.type = 'unknown'; });
+  rng.shuffle(restPool).slice(0, counts.unknown).forEach(n => { n.type = 'unknown'; });
 
   return { nodes, startNodes, bossNode, rows: ROWS, cols: COLS };
 }

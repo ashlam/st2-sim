@@ -10,8 +10,8 @@ await page.click('[data-act="new"]'); await page.waitForTimeout(250); await page
 await page.waitForTimeout(300);
 await page.click('#asc-list .choice >> nth=9');   // 野心 9
 await page.waitForTimeout(400);
-console.log('neow?', !!(await page.$('#neow-list')));
-await page.click('#neow-list .choice');
+console.log('neow?', !!(await page.$('#anc-list')));
+await page.click('#anc-list .choice');
 await page.waitForTimeout(600);
 console.log('run?', await page.evaluate(() => !!window.app.run), 'overlay?', await page.evaluate(() => !document.querySelector('.overlay-layer').classList.contains('hidden')));
 const before = await page.evaluate(() => { const r = window.app.run; return r ? { seed: r.seed, hp: r.hp, deck: r.deck.length, asc: r.asc, bosses: r.bossQueue.length } : null; });

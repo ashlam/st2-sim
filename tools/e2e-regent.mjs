@@ -27,7 +27,7 @@ await page.click('[data-char="REGENT"]');
 await page.waitForTimeout(200);
 await page.click('#asc-list .choice');
 await page.waitForTimeout(250);
-await page.click('#neow-list .choice');
+await page.click('#anc-list .choice');
 await page.waitForTimeout(300);
 await page.evaluate(() => {
   const c = [...document.querySelectorAll('.sheet .btn')].find(b => b.textContent.includes('取消'));

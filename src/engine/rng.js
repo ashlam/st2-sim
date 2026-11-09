@@ -27,6 +27,17 @@ export class Rng {
   }
   int(max) { return Math.floor(this.next() * max); }
   range(min, max) { return min + this.int(max - min + 1); }
+  /** 正态分布取整并夹在 [lo, hi]（对照原作 Rng.NextGaussianInt 的拒绝采样，用于各幕休息处数量） */
+  gaussInt(mean, sd, lo, hi) {
+    for (let i = 0; i < 200; i++) {
+      const u = this.next() || 1e-9;
+      const v = this.next();
+      const n = Math.sqrt(-2 * Math.log(u)) * Math.cos(2 * Math.PI * v);
+      const r = Math.round(mean + n * sd);
+      if (r >= lo && r <= hi) return r;
+    }
+    return Math.min(hi, Math.max(lo, Math.round(mean)));
+  }
   chance(p) { return this.next() < p; }
   pick(arr) { return arr[this.int(arr.length)]; }
   shuffle(arr) {

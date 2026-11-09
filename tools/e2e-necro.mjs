@@ -130,6 +130,7 @@ function newCombat() {
   const e = c.alive()[0];
   e.block = 99;
   e.hp = 5;
+  delete e.powers.artifact;   // 立柱构造体自带 1 层人工制品，会挡掉灾厄；这条用例只验灾厄本身
   await c.necro.addDoom(5, e);
   const killed = await c.necro.doomKill([e]);
   ok(!e.alive, '生命等于灾厄层数时死亡');

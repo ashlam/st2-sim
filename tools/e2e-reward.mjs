@@ -62,6 +62,8 @@ const s1 = await page.evaluate(() => {
 await page.waitForTimeout(200);
 await page.evaluate(() => { document.querySelector('#card-reward [data-uid]')?.click(); });
 await page.waitForTimeout(150);
+await page.evaluate(() => { document.querySelector('.cfm-pop .cfm-ok')?.click(); });
+await page.waitForTimeout(150);
 await page.evaluate(() => { document.querySelector('#skip-reward')?.click(); });
 await page.waitForTimeout(300);
 const s1after = await page.evaluate(() => ({ gold: window.app.run.gold, relics: window.app.run.relics.slice(), done: window.__done }));
@@ -79,9 +81,14 @@ const s2 = await page.evaluate(() => {
   return { gold: app.run.gold, relic };
 });
 await page.waitForTimeout(200);
-await page.evaluate(() => {
-  document.querySelectorAll('#loot-list [data-reward]').forEach(el => el.click());
-});
+await page.waitForTimeout(200);
+const lootCount = await page.evaluate(() => document.querySelectorAll('#loot-list [data-reward]').length);
+for (let k = 0; k < lootCount; k++) {
+  await page.evaluate((i) => { document.querySelectorAll('#loot-list [data-reward]')[i]?.click(); }, k);
+  await page.waitForTimeout(120);
+  await page.evaluate(() => { document.querySelector('.cfm-pop .cfm-ok')?.click(); });
+  await page.waitForTimeout(120);
+}
 await page.waitForTimeout(200);
 const mid = await page.evaluate(() => ({ gold: window.app.run.gold, relics: window.app.run.relics.length, tip: document.querySelector('#reward-tip')?.textContent }));
 await page.evaluate(() => { document.querySelector('#skip-reward')?.click(); });

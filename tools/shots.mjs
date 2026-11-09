@@ -7,7 +7,7 @@ await page.goto(`http://localhost:${process.env.PORT || 8081}/index.html`, { wai
 await page.click('[data-act="new"]'); await page.waitForTimeout(250); await page.click('[data-char="IRONCLAD"]');
 await page.click('#asc-list .choice');
 await page.waitForTimeout(150);
-await page.click('#neow-list .choice');
+await page.click('#anc-list .choice');
 await page.waitForTimeout(400);
 
 // 商店
