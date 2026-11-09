@@ -564,6 +564,10 @@ html, body {
 .choice:active { transform: scale(.985); border-color: #e3b955; }
 .choice .t { font-weight: 700; margin-bottom: 2px; color: #f0e7d6; }
 .choice .d { font-size: 12px; color: var(--text-dim); }
+/* 菜单里的危险项（放弃本局） */
+.choice.danger { border-color: #4a2427; background: linear-gradient(180deg, #241a1c, #1a1315); }
+.choice.danger .t { color: #e0625f; }
+.choice.danger:active { border-color: #e0625f; }
 
 .reward-grid { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; padding: 8px 0 10px; }
 .reward-grid .card { width: 104px; height: 148px; }

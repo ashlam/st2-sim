@@ -25,6 +25,16 @@ await page.screenshot({ path: 'shots/03-neow.png' });
 // 选第一个祝福
 await page.click('#anc-list .choice');
 await page.waitForTimeout(500);
+// 先古遗物的「拾起时选牌」是延迟任务，会在这里弹出面板，挡着后面的点击
+for (let i = 0; i < 4; i++) {
+  const open = await page.evaluate(() => !document.querySelector('#overlay-layer').classList.contains('hidden'));
+  if (!open) break;
+  await page.evaluate(() => {
+    const btn = [...document.querySelectorAll('#overlay-layer .btn')].find(x => /跳过|关闭|取消|不要/.test(x.textContent));
+    (btn || document.querySelector('#overlay-layer .btn'))?.click();
+  });
+  await page.waitForTimeout(200);
+}
 await page.screenshot({ path: 'shots/04-map.png' });
 
 // 进入第一个可用节点

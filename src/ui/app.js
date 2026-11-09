@@ -360,6 +360,90 @@ export class App {
     $('#close-help').onclick = () => this.clearOverlay();
   }
 
+  /* ================= 菜单（战斗 / 地图右上角 ☰） ================= */
+  showMenu() {
+    const run = this.run;
+    if (!run) return;
+    const c = this.combat;
+    const inCombat = !!c;
+    const act = ACT_INFO[run.act] || {};
+    const where = inCombat
+      ? `战斗中 · 回合 ${c.turn}`
+      : `${act.label || ''} ${act.name || ''} · 第 ${run.floor} 层`;
+    const rows = [
+      { k: 'deck', t: `牌组 · ${run.deck.length} 张`, d: '看整副牌，点卡牌查详情' },
+    ];
+    if (inCombat) rows.push({ k: 'log', t: '战斗记录', d: `本场已记 ${c.log.length} 条，可按回合复盘` });
+    rows.push({ k: 'help', t: '玩法说明', d: '能量、回合流程、关键词' });
+    rows.push({
+      k: 'exit', t: '返回标题',
+      d: inCombat ? '战斗进度不会保存，下次从这一层之前重走' : '进度写入存档，下次可以继续攀登',
+    });
+    rows.push({ k: 'abandon', t: '放弃本局', d: '删除存档，本局的牌组与遗物都会丢失', danger: true });
+
+    this.setOverlay(`<div class="sheet">
+      <div class="sheet-title">☰ 菜单</div>
+      <div class="sheet-sub">${where} · ❤ ${run.hp}/${run.maxHp} · 金币 ${run.gold}</div>
+      <div class="sheet-body"><div class="choices" id="menu-list">${rows.map(r => `
+        <button class="choice${r.danger ? ' danger' : ''}" data-menu="${r.k}">
+          <div class="t">${r.t}</div><div class="d">${r.d}</div>
+        </button>`).join('')}</div></div>
+      <button class="btn primary" id="menu-close">继续游戏</button>
+    </div>`);
+    $('#menu-close').onclick = () => this.clearOverlay();
+    $('#menu-list').onclick = (ev) => {
+      const b = ev.target.closest('[data-menu]');
+      if (!b) return;
+      const k = b.dataset.menu;
+      if (k === 'deck') return this.showDeckView();
+      if (k === 'log') return this.showCombatLog();
+      if (k === 'help') return this.showHelp();
+      if (k === 'exit') return this.exitToTitle();
+      if (k === 'abandon') return this.abandonRun();
+    };
+  }
+
+  /** 返回标题：战斗之外会存档；战斗内**故意不写盘**，让存档停在进入这层之前 */
+  async exitToTitle() {
+    const inCombat = !!this.combat;
+    const ok = await this.askConfirm({
+      title: '返回标题？',
+      body: inCombat
+        ? '战斗还没打完。战斗中的进度不会保存，下次继续时要从这一层之前重走，这场战斗会从头再来。'
+        : '当前进度会写入存档，下次可以从这里继续攀登。',
+      okText: '返回标题', cancelText: '继续游戏',
+    });
+    if (!ok) return;
+    if (!inCombat) this.save();
+    this.clearOverlay();
+    this.combat = null;
+    this.selectedCard = null;
+    this.pendingPotion = null;
+    this.run = null;
+    this.battleLogs = [];
+    this._gameOver = false;
+    this.showTitle();
+  }
+
+  /** 放弃本局：删档回标题 */
+  async abandonRun() {
+    const ok = await this.askConfirm({
+      title: '放弃本局？',
+      body: '当前存档会被删除，牌组、遗物和本局进度都会消失，无法恢复。',
+      okText: '放弃本局', cancelText: '再想想',
+    });
+    if (!ok) return;
+    this.clearSave();
+    this.clearOverlay();
+    this.combat = null;
+    this.selectedCard = null;
+    this.pendingPotion = null;
+    this.run = null;
+    this.battleLogs = [];
+    this._gameOver = false;
+    this.showTitle();
+  }
+
   /* ================= 新游戏 ================= */
   showCharacterSelect() {
     const cards = CHARACTERS.map((c) => {
@@ -721,6 +805,7 @@ export class App {
             <div class="hpbar"><i style="width:${(run.hp / run.maxHp) * 100}%"></i><span>${run.hp} / ${run.maxHp}</span></div>
           </div>
           <div class="hud-chip gold"><span class="ic">◉</span>${run.gold}</div>
+          <div class="hud-chip logbtn" id="open-menu" title="菜单">☰</div>
         </div>
         <div class="relic-strip">${run.relics.map(relicSlot).join('')}${run.potions.map(p => p ? `<div class="potion" data-potion-info="${p}">${POTIONS[p].icon}</div>` : '<div class="potion empty">·</div>').join('')}</div>
         <div class="map-head">
@@ -736,7 +821,6 @@ export class App {
         </div>
       </div>`;
 
-    $('#deck-btn').onclick = () => this.showDeckView();
     const scroller = $('.map-scroll');
     if (scroller) scroller.scrollTop = scroller.scrollHeight;
     this.root.onclick = (ev) => {
@@ -745,6 +829,8 @@ export class App {
         const n = this.run.map.nodes.find(x => x.id === nodeEl.dataset.node);
         this.enterNode(n);
       }
+      if (ev.target.closest('#open-menu')) { this.showMenu(); return; }
+      if (ev.target.closest('#deck-btn')) { this.showDeckView(); return; }
       const relicEl = ev.target.closest('[data-relic]');
       if (relicEl) this.showRelicInfo(relicEl.dataset.relic);
       const potEl = ev.target.closest('[data-potion-info]');
@@ -1218,6 +1304,7 @@ export class App {
           </div>
           <div class="hud-chip gold" data-kw-kind="term" data-kw-id="gold"><span class="ic">◉</span>${run.gold}</div>
           <div class="hud-chip logbtn" id="open-log" title="战斗记录">📜</div>
+          <div class="hud-chip logbtn" id="open-menu" title="菜单">☰</div>
         </div>
         <div class="relic-strip">${run.relics.map(relicSlot).join('')}${run.potions.map((pid, i) => pid ? `<div class="potion" data-potion="${i}">${POTIONS[pid].icon}</div>` : '<div class="potion empty">·</div>').join('')}</div>
         <div class="battlefield">
@@ -1256,6 +1343,7 @@ export class App {
     // 事件绑定
     this.root.onclick = (ev) => {
       if (ev.target.closest('#end-turn')) { this.onEndTurn(); return; }
+      if (ev.target.closest('#open-menu')) { this.showMenu(); return; }
       if (ev.target.closest('#open-log')) { this.showCombatLog(); return; }
       if (ev.target.closest('[data-info-player]')) { this.showPlayerInfo(); return; }
       const enemyEl = ev.target.closest('[data-enemy]');
