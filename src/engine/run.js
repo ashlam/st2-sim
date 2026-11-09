@@ -49,6 +49,8 @@ export class Run {
     this.eventPool = [];
     this.cardPoolUsed = [];
     this.log = [];
+    // 逐场战斗的战报摘要（供结算界面复盘用；只存数字，不存日志）
+    this.battles = [];
     this.dead = false;
     this.victory = false;
     // 事件遗物的少量计数器（巨口储蓄罐是否已消费 / 余烬茶剩余场次 / 石之剑精英数…）
@@ -389,6 +391,7 @@ export class Run {
       bossKilled: this.bossKilled, orbSlots: this.orbSlots, act1: this.act1,
       relicData: this.relicData, pendingRelicRewards: this.pendingRelicRewards,
       relicJobs: this.relicJobs || [], actAncient: this.actAncient || null,
+      battles: (this.battles || []).slice(-80),
       log: this.log.slice(-20),
     });
   }
@@ -406,6 +409,7 @@ export class Run {
     if (d.act1) run.act1 = d.act1;
     if (d.relicData) run.relicData = d.relicData;
     if (Array.isArray(d.relicJobs)) run.relicJobs = d.relicJobs;
+    if (Array.isArray(d.battles)) run.battles = d.battles;
     if (d.actAncient) run.actAncient = d.actAncient;
     if (typeof d.pendingRelicRewards === 'number') run.pendingRelicRewards = d.pendingRelicRewards;
     if (typeof d.orbSlots === 'number') run.orbSlots = d.orbSlots;

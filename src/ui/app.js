@@ -34,6 +34,27 @@ const LAST_ACT = 3;
 
 const esc = (s) => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
+/**
+ * 把数据里的官方标记换成 HTML。**输入必须是已转义文本**（或 linkify 的产物），
+ * 因为 [gold] 这类方括号不会被 esc 转义，可以在转义后安全替换。
+ * 对照原作本地化：gold 高亮 / red 负面 / purple 附魔与先古 / b 强调 / sine 灵语。
+ */
+function markup(html) {
+  return String(html)
+    .replace(/\[gold\]/g, '<span class="kw">').replace(/\[\/gold\]/g, '</span>')
+    .replace(/\[red\]/g, '<span class="neg">').replace(/\[\/red\]/g, '</span>')
+    .replace(/\[purple\]/g, '<span class="arc">').replace(/\[\/purple\]/g, '</span>')
+    .replace(/\[b\]/g, '<b>').replace(/\[\/b\]/g, '</b>')
+    .replace(/\[i\]/g, '<i>').replace(/\[\/i\]/g, '</i>')
+    .replace(/\[sine\]/g, '<span class="sine">').replace(/\[\/sine\]/g, '</span>');
+}
+
+/** 纯文本（未转义）→ HTML：转义 + 标记 + 换行 */
+function rich(s) { return markup(esc(s)).replace(/\n/g, '<br>'); }
+
+/** 已带链接的 HTML → 只补标记，不再转义 */
+function richLinked(s) { return markup(linkify(s)); }
+
 /** 卡牌文本渲染：{Var} 替换数值，[gold]..[/gold] 高亮，opts.link 时牌名/状态名变成可点关键词 */
 function fmtText(def, card, combat, opts = {}) {
   let text = def.textFn ? def.textFn(card) : def.text;
@@ -44,7 +65,7 @@ function fmtText(def, card, combat, opts = {}) {
   text = String(text).replace(/\{([A-Za-z]+)\}/g, (m, k) => (vars[k] != null ? `${PH}${k}${PH}` : ''));
   let html = opts.link ? linkify(text) : esc(text);
   html = html.replace(/\u0001([A-Za-z]+)\u0001/g, (m, k) => `<b class="num">${vars[k]}</b>`);
-  html = html.replace(/\[gold\]/g, '<span class="kw">').replace(/\[\/gold\]/g, '</span>');
+  html = markup(html);
   return html.replace(/\n/g, '<br>');
 }
 
@@ -134,6 +155,7 @@ export class App {
     this.combat = null;
     this.selectedCard = null;
     this.pendingPotion = null;
+    this.battleLogs = [];          // 本局每场战斗的日志（只在内存里，供战报翻记录）
     this.screen = 'title';
     // 全局接管「关键词」点击：牌名、状态名、敌人名、遗物名、机制词
     // 放在捕获阶段，避免点击落在卡牌/敌人身上时又被出牌逻辑吃掉
@@ -159,6 +181,8 @@ export class App {
   /**
    * 长按任意卡面（手牌 / 卡牌奖励 / 商店卡牌 / 牌堆）弹出详情，松手不会触发出牌或选中。
    * 短按行为完全不变：手牌出牌、奖励选中、商店开购买确认。
+   * 战斗里的药水同理：短按使用，长按只看说明——药水是不可逆的消耗品，
+   * 手指一抖就用掉太亏。
    */
   initLongPress() {
     const LONG_MS = 400;
@@ -168,7 +192,11 @@ export class App {
 
     document.addEventListener('pointerdown', (ev) => {
       if (ev.pointerType === 'mouse' && ev.button !== 0) return;
-      const el = ev.target.closest && ev.target.closest('[data-card], [data-buy-card]');
+      const closest = ev.target.closest && ev.target.closest.bind(ev.target);
+      if (!closest) return;
+      const potEl = closest('[data-potion]');
+      const cardEl = potEl ? null : closest('[data-card], [data-buy-card]');
+      const el = potEl || cardEl;
       if (!el) return;
       // 已经在详情层里的卡面不用再长按
       if (el.closest('.kw-pop')) return;
@@ -177,7 +205,8 @@ export class App {
       timer = setTimeout(() => {
         timer = null;
         longFired = true;
-        this.peekCard(el);
+        if (potEl) this.peekPotion(+potEl.dataset.potion);
+        else this.peekCard(el);
         if (navigator.vibrate) { try { navigator.vibrate(12); } catch (e) {} }
       }, LONG_MS);
     }, true);
@@ -203,6 +232,13 @@ export class App {
     }, true);
 
     document.addEventListener('pointercancel', () => { longFired = false; clear(); }, true);
+  }
+
+  /** 长按药水：只看说明，不用掉 */
+  peekPotion(i) {
+    const id = this.run?.potions?.[i];
+    if (!id) return;
+    this.showPotionInfo(id);
   }
 
   /** 长按某个卡面：优先用战斗里的实际牌（数值是当前生效的），否则退回牌面本身 */
@@ -362,6 +398,7 @@ export class App {
     let seed = '';
     for (let i = 0; i < 8; i++) seed += seeds[Math.floor(Math.random() * seeds.length)];
     this.run = new Run(seed, asc, charId);
+    this.battleLogs = [];
     this.save();
     this.showAncient();
   }
@@ -379,7 +416,7 @@ export class App {
       <div class="sheet-title">${def.icon} ${def.title}</div>
       <div class="sheet-sub">${def.epithet} · 第 ${run.act} 幕</div>
       <div class="sheet-body">
-        <div class="sheet-sub" style="white-space:pre-wrap;line-height:1.7">${esc(def.text)}</div>
+        <div class="sheet-sub ancient-voice">${rich(def.text)}</div>
         <div class="choices" id="anc-list" style="margin-top:14px"></div>
       </div>
     </div>`);
@@ -389,7 +426,7 @@ export class App {
       if (!d) return;
       const b = document.createElement('button');
       b.className = 'choice';
-      b.innerHTML = `<div class="t">${d.icon || '◆'} ${d.name}</div><div class="d">${d.desc || ''}</div>`;
+      b.innerHTML = `<div class="t">${d.icon || '◆'} ${esc(d.name)}</div><div class="d">${rich(d.desc)}</div>`;
       b.onclick = async () => {
         this.clearOverlay();
         if (o.relic === 'SEA_GLASS' && o.charId) run.relicData.seaGlassChar = o.charId;
@@ -397,9 +434,11 @@ export class App {
         run.addRelic(o.relic);
         seen.push(run.act);
         this.save();
+        // 先把地图铺上：拾起时要选牌的遗物会盖在地图上，而不是盖在一片空白上
+        this.showMap();
         await this.flushRelicJobs();
         this.save();
-        this.showMap();
+        this.showMap();   // 选牌可能改了牌组，重画一次让牌组数跟上
       };
       list.appendChild(b);
     });
@@ -745,7 +784,7 @@ export class App {
       el.className = 'cfm-pop';
       el.innerHTML = `<div class="cfm-box">
         <div class="cfm-title">${esc(title)}</div>
-        ${sub ? `<div class="cfm-sub">${esc(sub)}</div>` : ''}
+        ${sub ? `<div class="cfm-sub">${rich(sub)}</div>` : ''}
         ${body ? `<div class="cfm-body">${body}</div>` : ''}
         <div class="cfm-actions">
           <button class="btn cfm-cancel">${esc(cancelText)}</button>
@@ -784,7 +823,7 @@ export class App {
   showTermInfo(id) {
     const t = TERMS[id];
     if (!t) return;
-    const body = String(t.desc).split('\n').map(p => `<p class="kw-p">${linkify(p)}</p>`).join('');
+    const body = String(t.desc).split('\n').map(p => `<p class="kw-p">${richLinked(p)}</p>`).join('');
     this.showInfo({ icon: t.icon, title: t.name, sub: t.group, body });
   }
 
@@ -964,13 +1003,13 @@ export class App {
   showRelicInfo(id) {
     const r = RELICS[id];
     if (!r) return;
-    this.showInfo({ icon: r.icon, title: r.name, sub: '遗物', body: `<p class="kw-p">${linkify(r.desc)}</p>` });
+    this.showInfo({ icon: r.icon, title: r.name, sub: '遗物', body: `<p class="kw-p">${richLinked(r.desc)}</p>` });
   }
 
   showPotionInfo(id) {
     const p = POTIONS[id];
     if (!p) return;
-    this.showInfo({ icon: p.icon, title: p.name, sub: '药水', body: `<p class="kw-p">${linkify(p.desc)}</p>` });
+    this.showInfo({ icon: p.icon, title: p.name, sub: '药水', body: `<p class="kw-p">${richLinked(p.desc)}</p>` });
   }
 
   toastBtn(text) { this.toast(text, 2000); }
@@ -1046,6 +1085,10 @@ export class App {
     this.run.combatCount++;
     this._eventCombatAfter = afterEvent;
     this.combat = new Combat(this.run, enc, { speed: window.DEBUG_SPEED ?? 1 });
+    // 战报要在战斗结束后知道「这一场是普通/精英/首领、进门时多少血」
+    this.combat._kind = kind;
+    this.combat._event = !!afterEvent;
+    this.combat._hpStart = this.run.hp;
     this.combat.onUpdate = () => this.renderCombat();
     this.combat.onFloat = (target, text, kind2) => this.floatAt(target, text, kind2);
     this.combat.onLog = (m) => {};
@@ -1315,8 +1358,9 @@ export class App {
   }
 
   /** 战斗记录：按回合分组，可复制成纯文本便于复盘。独立弹层，任何界面都能打开 */
-  showCombatLog() {
-    const entries = (this.combat && this.combat.log.length ? this.combat.log : this.lastCombatLog) || [];
+  showCombatLog(entriesOverride = null, subOverride = null) {
+    const entries = entriesOverride
+      || (this.combat && this.combat.log.length ? this.combat.log : this.lastCombatLog) || [];
     if (!entries.length) return this.toast('还没有战斗记录');
     const KIND_ICON = {
       turn: '⏱', play: '🃏', damage: '💥', block: '🛡',
@@ -1357,7 +1401,9 @@ export class App {
 
     const modal = document.createElement('div');
     modal.className = 'log-modal';
-    const sub = [this.lastCombatTitle, `共 ${entries.length} 条`, '点亮起的词看说明'].filter(Boolean).join(' · ');
+    const sub = subOverride
+      ? `${subOverride} · 共 ${entries.length} 条`
+      : [this.lastCombatTitle, `共 ${entries.length} 条`, '点亮起的词看说明'].filter(Boolean).join(' · ');
     modal.innerHTML = `<div class="sheet log-sheet">
       <div class="sheet-title">战斗记录</div>
       <div class="sheet-sub">${esc(sub)}</div>
@@ -1456,6 +1502,7 @@ export class App {
     this.lastCombatLog = c.log.slice();
     this.lastCombatTitle = c.enemies.map(e => e.name).join('、');
     this.run.hp = c.player.hp;
+    this.recordBattle(c, win);
     this.save();
     if (!win) {
       this.combat = null;
@@ -1564,8 +1611,8 @@ export class App {
   showRewards(rewards, onDone) {
     const items = rewards.map((r, i) => {
       if (r.kind === 'gold') return `<div class="choice" data-reward="${i}"><div class="t">◉ ${r.amount} 金币</div><div class="d">点击领取</div></div>`;
-      if (r.kind === 'relic') return `<div class="choice" data-reward="${i}"><div class="t">${RELICS[r.id].icon} ${RELICS[r.id].name}</div><div class="d">${RELICS[r.id].desc}</div></div>`;
-      if (r.kind === 'potion') return `<div class="choice" data-reward="${i}"><div class="t">${POTIONS[r.id].icon} ${POTIONS[r.id].name}</div><div class="d">${POTIONS[r.id].desc}</div></div>`;
+      if (r.kind === 'relic') return `<div class="choice" data-reward="${i}"><div class="t">${RELICS[r.id].icon} ${RELICS[r.id].name}</div><div class="d">${rich(RELICS[r.id].desc)}</div></div>`;
+      if (r.kind === 'potion') return `<div class="choice" data-reward="${i}"><div class="t">${POTIONS[r.id].icon} ${POTIONS[r.id].name}</div><div class="d">${rich(POTIONS[r.id].desc)}</div></div>`;
       if (r.kind === 'remove') return `<div class="choice sold"><div class="t">✂️ 移除一张牌</div><div class="d">禁忌魔典：点「继续」后选择要移除的牌</div></div>`;
       return '';
     }).join('');
@@ -1836,7 +1883,7 @@ export class App {
       icon: RELICS[item.id].icon,
       name: RELICS[item.id].name,
       tag: '遗物',
-      descHtml: esc(RELICS[item.id].desc).replace(/\n/g, '<br>'),
+      descHtml: rich(RELICS[item.id].desc),
       price: item.price, sold: item.sold,
     });
 
@@ -1845,7 +1892,7 @@ export class App {
       icon: POTIONS[item.id].icon,
       name: POTIONS[item.id].name,
       tag: '药水',
-      descHtml: esc(POTIONS[item.id].desc),
+      descHtml: rich(POTIONS[item.id].desc),
       price: item.price, sold: item.sold,
       extra: potionFull && !item.sold ? '<span class="shop-tag warn">栏位已满</span>' : '',
     });
@@ -1996,7 +2043,7 @@ export class App {
       <div class="sheet-body">
         <div class="choices">
           <div class="choice"><div class="t">◉ ${gold} 金币</div><div class="d">自动获得</div></div>
-          ${rid ? `<div class="choice"><div class="t">${RELICS[rid].icon} ${RELICS[rid].name}</div><div class="d">${RELICS[rid].desc}</div></div>` : ''}
+          ${rid ? `<div class="choice"><div class="t">${RELICS[rid].icon} ${RELICS[rid].name}</div><div class="d">${rich(RELICS[rid].desc)}</div></div>` : ''}
         </div>
       </div>
       <button class="btn primary" id="take-treasure">收下</button>
@@ -2041,19 +2088,19 @@ export class App {
     this.setOverlay(`<div class="sheet">
       <div class="event-art">${esc(ev.title.slice(0, 1))}</div>
       <div class="sheet-title">${esc(ev.title)}</div>
-      <div class="event-text">${esc(text)}</div>
+      <div class="event-text">${rich(text)}</div>
       <div class="sheet-body"><div class="choices" id="event-list"></div></div>
     </div>`);
     const list = $('#event-list');
     choices.forEach((ch) => {
       const b = document.createElement('button');
       b.className = 'choice' + (ch.disabled ? ' sold' : '');
-      b.innerHTML = `<div class="t">${esc(ch.label)}</div>${ch.desc ? `<div class="d">${esc(ch.desc)}</div>` : ''}`;
+      b.innerHTML = `<div class="t">${esc(ch.label)}</div>${ch.desc ? `<div class="d">${rich(ch.desc)}</div>` : ''}`;
       b.onclick = async () => {
         if (ch.disabled) return;
         const ok = await this.askConfirm({
           title: `确认选择「${ch.label}」？`,
-          body: `${ch.desc ? esc(ch.desc) + '<br>' : ''}事件里的选择通常无法反悔。`,
+          body: `${ch.desc ? rich(ch.desc) + '<br>' : ''}事件里的选择通常无法反悔。`,
           okText: '确认选择',
           cancelText: '再想想',
         });
@@ -2919,13 +2966,86 @@ export class App {
   }
 
   /* ================= 结算 ================= */
+  /** 把这一场战斗压进 run.battles（结算界面的战报用） */
+  recordBattle(c, win) {
+    const run = this.run;
+    const kind = c._event ? 'event' : (c._kind === 'boss' || c.isBoss ? 'boss'
+      : c._kind === 'elite' || c.isElite ? 'elite' : 'normal');
+    const label = { boss: '首领', elite: '精英', event: '事件', normal: '普通' }[kind] || '战斗';
+    run.battles.push({
+      floor: run.floor,
+      act: run.act,
+      kind, label,
+      enemies: [...new Set(c.enemies.map(e => e.name))],
+      enemyHp: c.enemies.reduce((a, e) => a + (e.maxHp || 0), 0),
+      turns: c.turn || 0,
+      won: !!win,
+      hpStart: c._hpStart ?? c.player.maxHp,
+      hpEnd: Math.max(0, c.player.hp),
+      dealt: Math.round(c.damageDealt || 0),
+      taken: Math.round(c.damageTaken || 0),
+    });
+    // 日志只留在内存里供本局复盘，不进存档（一张牌一条，太占地方）
+    (this.battleLogs || (this.battleLogs = [])).push({ rec: run.battles.at(-1), entries: c.log.slice(-300) });
+    if (this.battleLogs.length > 12) this.battleLogs.shift();
+  }
+
+  /** 战报：本局概览 + 逐场战斗，点某一场能翻那场的完整记录 */
+  showBattleReport() {
+    const run = this.run;
+    const battles = run.battles || [];
+    const sum = (k) => battles.reduce((a, b) => a + (b[k] || 0), 0);
+    const actName = { 1: '第一幕', 2: '第二幕', 3: '第三幕' }[run.act] || `第 ${run.act} 幕`;
+    const rows = battles.map((b, i) => {
+      const hasLog = !!(this.battleLogs || []).find(x => x.rec === b);
+      const hp = b.hpStart === b.hpEnd ? `${b.hpEnd}` : `${b.hpStart} → ${b.hpEnd}`;
+      return `<button class="br-row" data-br="${i}"${hasLog ? '' : ' disabled'}>
+        <span class="br-floor">${b.floor}</span>
+        <span class="br-main">
+          <span class="br-name">${esc(b.enemies.join('、') || '—')}</span>
+          <span class="br-sub">${b.label} · ${b.turns} 回合 · 生命 ${hp} · 伤害 ${b.dealt}／${b.taken}</span>
+        </span>
+        <span class="br-tag ${b.won ? 'win' : 'lose'}">${b.won ? '胜' : '败'}</span>
+      </button>`;
+    }).join('') || '<div class="sheet-sub" style="padding:10px 0">这局还没打过架</div>';
+
+    this.setOverlay(`<div class="sheet br-sheet">
+      <div class="sheet-title">战报</div>
+      <div class="sheet-sub">${esc(`${actName} · 第 ${run.floor} 层 · 种子 ${run.seed}`)}</div>
+      <div class="sheet-body">
+        <div class="br-grid">
+          <div><b>${run.floor}</b><span>抵达层数</span></div>
+          <div><b>${battles.length}</b><span>战斗场次</span></div>
+          <div><b>${run.stats.elites}</b><span>精英击杀</span></div>
+          <div><b>${run.stats.bosses}</b><span>首领击杀</span></div>
+          <div><b>${sum('dealt')}</b><span>造成伤害</span></div>
+          <div><b>${sum('taken')}</b><span>承受伤害</span></div>
+          <div><b>${run.deck.length}</b><span>牌组张数</span></div>
+          <div><b>${run.gold}</b><span>金币</span></div>
+        </div>
+        <div class="br-sec">逐场战斗${battles.length ? '（点一行看记录 · 伤害＝造成／承受）' : ''}</div>
+        <div class="br-list">${rows}</div>
+      </div>
+      <button class="btn primary" id="br-close" style="margin-top:10px">关闭</button>
+    </div>`);
+    $('#br-close').onclick = () => this.clearOverlay();
+    $('.br-list').onclick = (ev) => {
+      const row = ev.target.closest('[data-br]');
+      if (!row || row.disabled) return;
+      const b = battles[+row.dataset.br];
+      const hit = (this.battleLogs || []).find(x => x.rec === b);
+      if (!hit) return;
+      this.showCombatLog(hit.entries, `${b.label} · ${hit.rec.enemies.join('、')} · 第 ${b.floor} 层`);
+    };
+  }
+
   showGameOver(win) {
     this.clearSave();
     const run = this.run;
     this.root.innerHTML = `
       <div class="screen result-screen">
         <div class="result-title ${win ? 'win' : 'lose'}">${win ? '塔顶之光' : '你倒下了'}</div>
-        <div class="dim small">${win ? '你击败了第一幕的首领。' : '尖塔又一次收下了它的祭品。'}</div>
+        <div class="dim small">${win ? '你走完了这座高塔。' : '尖塔又一次收下了它的祭品。'}</div>
         <div class="result-stats">
           <div>抵达层数</div><b>${run.floor}</b>
           <div>战斗场次</div><b>${run.stats.combats}</b>
@@ -2934,8 +3054,12 @@ export class App {
           <div>牌组张数</div><b>${run.deck.length}</b>
           <div>金币</div><b>${run.gold}</b>
         </div>
-        <button class="btn primary" id="back-title" style="width:min(70%,280px)">返回标题</button>
+        <div class="result-actions">
+          <button class="btn" id="open-report">查看战报</button>
+          <button class="btn primary" id="back-title">返回标题</button>
+        </div>
       </div>`;
-    $('#back-title').onclick = () => { this.run = null; this.showTitle(); };
+    $('#open-report').onclick = () => this.showBattleReport();
+    $('#back-title').onclick = () => { this.run = null; this.combat = null; this.battleLogs = []; this.showTitle(); };
   }
 }

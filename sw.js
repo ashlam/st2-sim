@@ -1,4 +1,4 @@
-const CACHE = 'sts2sim-v20';
+const CACHE = 'sts2sim-v22';
 const ASSETS = [
   './', './index.html', './styles.css', './manifest.webmanifest',
   './src/main.js', './src/ui/app.js', './src/ui/inspect.js',

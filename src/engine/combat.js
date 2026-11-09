@@ -123,6 +123,9 @@ export class Combat {
     this.log = [];
     this.finished = false;
     this.won = false;
+    // 战报统计：本场造成的未格挡伤害 / 承受的伤害（觉醒等流程会重算，所以按累加记）
+    this.damageDealt = 0;
+    this.damageTaken = 0;
     this.openingDraw = 5 + (ascBane ? 0 : 0);
 
     // 亡灵契约师的专属子系统：奥斯提 / 灾厄 / 灵魂（其它角色为 null，完全不参与结算）
@@ -1032,6 +1035,12 @@ export class Combat {
     }
     if (remain > 0) {
       target.hp -= remain;
+      if (target.isPlayer) {
+        this.damageTaken += remain;
+        this.run.stats.damageTaken = (this.run.stats.damageTaken || 0) + remain;
+      } else {
+        this.damageDealt += remain;
+      }
       this.float(target, '-' + remain, 'dmg');
       if (target.isPlayer) {
         this.syncHp();
@@ -1765,6 +1774,8 @@ export class Combat {
       return;
     }
     this.player.hp -= n;
+    this.damageTaken += n;
+    this.run.stats.damageTaken = (this.run.stats.damageTaken || 0) + n;
     this.syncHp();
     this.hpLostThisTurn += n;
     if (!opts.silent) this.float(this.player, '-' + n, 'dmg');
