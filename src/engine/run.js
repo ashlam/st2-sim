@@ -305,10 +305,24 @@ export class Run {
   }
   removePotion(i) { this.potions[i] = null; }
   heal(n) {
+    if (this.dead || this.hp <= 0) return 0;   // 已经倒下就不再回血
+    const before = this.hp;
     this.hp = Math.min(this.maxHp, this.hp + n);
+    return this.hp - before;
   }
+  /**
+   * 战斗外的伤害（事件、诅咒结算…）。
+   * 源码里这些用的是 ValueProp.Unblockable | Unpowered，是**真会致死**的，
+   * 所以这里不再把生命钳在 1，而是允许掉到 0，由 UI 侧收尾进结算界面。
+   * @returns {number} 实际失去的生命
+   */
   damage(n) {
-    this.hp = Math.max(1, this.hp - n);
+    const before = this.hp;
+    this.hp = Math.max(0, this.hp - n);
+    const lost = before - this.hp;
+    if (lost > 0) this.stats.damageTaken = (this.stats.damageTaken || 0) + lost;
+    if (this.hp <= 0) this.dead = true;
+    return lost;
   }
   gainGold(n) {
     this.gold = Math.max(0, this.gold + n);
@@ -316,7 +330,8 @@ export class Run {
   }
   gainMaxHp(n) {
     this.maxHp = Math.max(1, this.maxHp + n);
-    if (n > 0) this.hp += n;
+    // 已经倒下的人不会因为最大生命变化而复活
+    if (n > 0) { if (this.hp > 0) this.hp += n; }
     else this.hp = Math.min(this.hp, this.maxHp);
   }
 

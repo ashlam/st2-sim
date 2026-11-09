@@ -674,6 +674,10 @@ html, body {
   border: 1px solid #2c3641;
 }
 .event-text { font-size: 14px; line-height: 1.75; color: #ddd5c6; margin-bottom: 14px; white-space: pre-wrap; }
+/* 事件里也要看得到血量和金币：有些选项是真会打死人的 */
+.ev-hud { display: flex; gap: 16px; font-size: 12px; color: var(--text-dim); margin: -6px 0 10px; letter-spacing: .02em; }
+.ev-hud b { color: var(--text); font-weight: 600; }
+.ev-hud b.low { color: #e0625f; }
 
 /* 结算 */
 .result-screen { justify-content: center; align-items: center; gap: 12px; text-align: center; }

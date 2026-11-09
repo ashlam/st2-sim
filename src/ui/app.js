@@ -311,7 +311,7 @@ export class App {
     this.root.onclick = (ev) => {
       const act = ev.target.closest('[data-act]')?.dataset.act;
       if (act === 'new') this.showCharacterSelect();
-      if (act === 'continue') { this.run = save; this.showMap(); }
+      if (act === 'continue') { this.run = save; this._gameOver = false; this.showMap(); }
       if (act === 'help') this.showHelp();
     };
   }
@@ -399,6 +399,7 @@ export class App {
     for (let i = 0; i < 8; i++) seed += seeds[Math.floor(Math.random() * seeds.length)];
     this.run = new Run(seed, asc, charId);
     this.battleLogs = [];
+    this._gameOver = false;
     this.save();
     this.showAncient();
   }
@@ -434,9 +435,12 @@ export class App {
         run.addRelic(o.relic);
         seen.push(run.act);
         this.save();
+        // 「拾起时受到伤害」的遗物（松动羊毛剪）可以直接把人打死
+        if (this.checkDeath()) return;
         // 先把地图铺上：拾起时要选牌的遗物会盖在地图上，而不是盖在一片空白上
         this.showMap();
         await this.flushRelicJobs();
+        if (this.checkDeath()) return;
         this.save();
         this.showMap();   // 选牌可能改了牌组，重画一次让牌组数跟上
       };
@@ -662,6 +666,8 @@ export class App {
   }
 
   showMap() {
+    // 兜底：任何流程把人耗到 0 血，都不该再画地图（遗物「拾起时受到伤害」等）
+    if (this.checkDeath()) return;
     this.screen = 'map';
     this.selectedCard = null;
     this.closeInfo();
@@ -1502,6 +1508,7 @@ export class App {
     this.lastCombatLog = c.log.slice();
     this.lastCombatTitle = c.enemies.map(e => e.name).join('、');
     this.run.hp = c.player.hp;
+    if (this.run.hp <= 0) this.run.dead = true;
     this.recordBattle(c, win);
     this.save();
     if (!win) {
@@ -2078,6 +2085,7 @@ export class App {
   renderEvent(id, page = 'INITIAL') {
     const ev = EVENTS[id];
     if (!ev) { this.showMap(); return; }
+    const run = this.run;
     if (page === 'INITIAL') this._evs = {};
     const pg = page === 'INITIAL' ? { text: ev.text, choices: ev.choices } : ev.pages?.[page];
     if (!pg) { this.showMap(); return; }
@@ -2088,6 +2096,10 @@ export class App {
     this.setOverlay(`<div class="sheet">
       <div class="event-art">${esc(ev.title.slice(0, 1))}</div>
       <div class="sheet-title">${esc(ev.title)}</div>
+      <div class="ev-hud">
+        <span>❤ <b class="${run.hp <= run.maxHp * 0.25 ? 'low' : ''}">${run.hp}</b> / ${run.maxHp}</span>
+        <span>金币 <b>${run.gold}</b></span>
+      </div>
       <div class="event-text">${rich(text)}</div>
       <div class="sheet-body"><div class="choices" id="event-list"></div></div>
     </div>`);
@@ -2107,6 +2119,8 @@ export class App {
         if (!ok) return;
         this.clearOverlay();
         await ch.apply();
+        // 事件伤害可能把人打死（深渊浴场、滑脚木桥…），死了就不再往下走
+        if (this.checkDeath()) return;
         // 跳到别的一段 / 进入战斗的选项自己接管后续流程；其余选项到此结束
         if (!ch.page && !ch.combat && !this._eventFinished) this.eventDone();
       };
@@ -2118,7 +2132,12 @@ export class App {
   eventPage(id, page) { this.renderEvent(id, page); }
 
   /** 事件结束后回到地图 */
-  eventDone() { this._eventFinished = true; this.save(); this.showMap(); }
+  eventDone() {
+    this._eventFinished = true;
+    if (this.checkDeath()) return;      // 最后一下掉血致死时不回地图，直接结算
+    this.save();
+    this.showMap();
+  }
 
   /* ================= 选择卡牌 ================= */
   requestSelection({ pool, count = 1, prompt = '选择卡牌', optional = false, multi = false, confirm = '' }) {
@@ -2181,8 +2200,23 @@ export class App {
   }
 
   /* ================= 事件用到的便捷操作 ================= */
-  heal(n) { this.run.heal(n); this.toast(`回复 ${n} 点生命`); }
-  damage(n) { this.run.damage(n); this.toast(`失去 ${n} 点生命`); }
+  heal(n) { const got = this.run.heal(n); this.toast(`回复 ${Math.max(0, got)} 点生命`); }
+  /** 事件伤害可以是致命的，收尾统一交给 checkDeath() */
+  damage(n) { const lost = this.run.damage(n); this.toast(`失去 ${lost} 点生命`); }
+  /**
+   * 非战斗场合掉血到 0：收掉覆盖层、直接进结算。
+   * 事件里有「先掉血再给奖励」的写法，所以只在一次选择结束后判一次，
+   * 不能一掉到 0 就当场打断（否则奖励和后续分支都会丢）。
+   * @returns {boolean} 是否已经死亡
+   */
+  checkDeath() {
+    if (!this.run || this.run.hp > 0) return false;
+    if (this._gameOver) return true;
+    this.clearOverlay();
+    this.combat = null;
+    this.showGameOver(false);
+    return true;
+  }
   gainGold(n) { this.run.gainGold(n); this.toast(n >= 0 ? `获得 ${n} 金币` : `失去 ${-n} 金币`); }
   gainMaxHp(n) { this.run.gainMaxHp(n); this.toast(n >= 0 ? `最大生命 +${n}` : `最大生命 ${n}`); }
   loseMaxHp(n) { this.run.gainMaxHp(-n); this.toast(`最大生命 -${n}`); }
@@ -2314,6 +2348,7 @@ export class App {
   killPlayer() {
     this._eventFinished = true;
     this.run.hp = 0;
+    this.run.dead = true;
     this.showGameOver(false);
   }
   /** 事件里发起的战斗：encId 只是标识，enemyIds 决定出场敌人；opts 可带 slots / repeat */
@@ -3040,7 +3075,9 @@ export class App {
   }
 
   showGameOver(win) {
+    this._gameOver = true;
     this.clearSave();
+    this.clearOverlay();
     const run = this.run;
     this.root.innerHTML = `
       <div class="screen result-screen">
